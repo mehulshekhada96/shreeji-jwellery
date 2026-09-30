@@ -22,8 +22,13 @@ export default function MeeshoDirectSort({
   loadPdfJs,
   readFileAsArrayBuffer,
   reconstructLinesFromTextItems,
+  parseCSV,
+  parseExcel,
+  findHeaderKeyInsensitive,
+  readFileAsText,
 }) {
   const [selectedPdfFile, setSelectedPdfFile] = useState(null);
+  const [selectedCsvFile, setSelectedCsvFile] = useState(null);
 
   const DELIVERY_PARTNERS = [
     'ValmoPlus',
@@ -186,13 +191,30 @@ export default function MeeshoDirectSort({
 
     try {
       const pdfFile = event.target['direct-pdf'].files[0];
-      if (!pdfFile) throw new Error('Please select a PDF file');
+      const dataFile = event.target['direct-csv'].files[0];
+      if (!pdfFile || !dataFile) throw new Error('Please select both PDF and CSV/Excel files');
 
-      setStatus('Loading PDF engine...');
-      const [pdfjsLib, pdfArrayBuffer] = await Promise.all([
-        loadPdfJs(),
-        readFileAsArrayBuffer(pdfFile),
-      ]);
+      const isExcel = /\.(xlsx|xls)$/i.test(dataFile.name);
+      
+      setStatus('Loading files...');
+      const [pdfjsLib, pdfArrayBuffer, csvData] = await (async () => {
+        const [lib, pdfBuf] = await Promise.all([
+          loadPdfJs(),
+          readFileAsArrayBuffer(pdfFile)
+        ]);
+        if (isExcel) {
+          const dataBuf = await readFileAsArrayBuffer(dataFile);
+          setStatus('Parsing Excel...');
+          const data = parseExcel(dataBuf);
+          return [lib, pdfBuf, data];
+        }
+        setStatus('Parsing CSV...');
+        const csvText = await readFileAsText(dataFile);
+        return [lib, pdfBuf, parseCSV(csvText)];
+      })();
+
+      const skuKey = csvData.length ? findHeaderKeyInsensitive(csvData[0], 'SKU') : null;
+      const originKey = csvData.length ? findHeaderKeyInsensitive(csvData[0], 'Origin') || findHeaderKeyInsensitive(csvData[0], 'origin') : null;
 
       setStatus('Reading PDF...');
       const loadingTask = pdfjsLib.getDocument({ data: pdfArrayBuffer });
@@ -219,7 +241,13 @@ export default function MeeshoDirectSort({
         // sellerAccount = legal name for sorting (e.g. "VAGHASIYA SHARDABEN MANSUKHBHAI")
         const sellerAccount = extractSellerAccountName(lines);
 
-        pageData.push({ pageNumber: i, sku, qty, deliveryPartner, storeName, sellerAccount });
+        let originName = 'Unknown Origin';
+        if (skuKey) {
+          const originRow = csvData.find(row => String(row[skuKey]).trim() === String(sku).trim());
+          if (originRow && originKey) originName = originRow[originKey] || 'Unknown Origin';
+        }
+
+        pageData.push({ pageNumber: i, sku, qty, deliveryPartner, storeName, sellerAccount, originName });
       }
 
       if (pageData.length === 0) {
@@ -228,11 +256,14 @@ export default function MeeshoDirectSort({
         );
       }
 
-      // Sort: single qty first, then multi; within group: SKU → Delivery Partner → Seller
+      // Sort: single qty first, then multi; within group: originName → SKU → Delivery Partner → Seller
       pageData.sort((a, b) => {
         const aIsMulti = a.qty > 1 ? 1 : 0;
         const bIsMulti = b.qty > 1 ? 1 : 0;
         if (aIsMulti !== bIsMulti) return aIsMulti - bIsMulti;
+
+        const originCmp = (a.originName || '').localeCompare(b.originName || '');
+        if (originCmp !== 0) return originCmp;
 
         const skuCmp = (a.sku || '').localeCompare(b.sku || '');
         if (skuCmp !== 0) return skuCmp;
@@ -242,6 +273,19 @@ export default function MeeshoDirectSort({
 
         // Sort by Store Name (short business name, e.g. "Bistro Sales")
         return (a.storeName || '').localeCompare(b.storeName || '');
+      });
+
+      // Count occurrences of each origin (excluding "Unknown Origin")
+      const originCounts = {};
+      const firstOriginIndex = {}; // Track first occurrence index of each origin
+      pageData.forEach((page, index) => {
+        if (page.originName && page.originName !== 'Unknown Origin') {
+          if (!originCounts[page.originName]) {
+            originCounts[page.originName] = 0;
+            firstOriginIndex[page.originName] = index;
+          }
+          originCounts[page.originName]++;
+        }
       });
 
       setStatus('Building output PDF...');
@@ -292,6 +336,37 @@ export default function MeeshoDirectSort({
           });
         }
 
+        // Draw Origin Name and Count at the bottom
+        const isFirstOfOrigin = firstOriginIndex[pageInfo.originName] === i;
+        const hasMultiplePages = originCounts[pageInfo.originName] > 1;
+        const showCount = isFirstOfOrigin && hasMultiplePages && pageInfo.originName !== 'Unknown Origin';
+
+        if (pageInfo.originName && pageInfo.originName !== 'Unknown Origin') {
+          copied.drawText(`Origin : ${pageInfo.originName}`, { 
+            x: 50, 
+            y: 50, 
+            size: 14, 
+            font: boldFont,
+            color: rgb(0, 0, 0)
+          });
+        }
+        
+        if (showCount) {
+          const count = originCounts[pageInfo.originName];
+          const countText = `(${count})`;
+          const countFontSize = 24;
+          
+          const countWidth = boldFont.widthOfTextAtSize(countText, countFontSize);
+          
+          copied.drawText(countText, {
+            x: width - countWidth - 50,
+            y: 50,
+            size: countFontSize,
+            font: boldFont,
+            color: rgb(0, 0, 0)
+          });
+        }
+
         outPdf.addPage(copied);
       }
 
@@ -307,7 +382,9 @@ export default function MeeshoDirectSort({
       setSuccess(true);
       setStatus(`Done! ${pageData.length} labels sorted & downloaded.`);
       setSelectedPdfFile(null);
+      setSelectedCsvFile(null);
       if (event.target['direct-pdf']) event.target['direct-pdf'].value = '';
+      if (event.target['direct-csv']) event.target['direct-csv'].value = '';
     } catch (err) {
       console.error('[MeeshoDirectSort]', err);
       setError(err.message || 'Processing failed');
@@ -333,11 +410,13 @@ export default function MeeshoDirectSort({
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M12 2a10 10 0 110 20A10 10 0 0112 2z" />
         </svg>
         <div>
-          <p className="text-sm font-semibold text-pink-800 mb-1">Meesho Direct Sort — PDF Only (No Excel needed)</p>
+          <p className="text-sm font-semibold text-pink-800 mb-1">Meesho Direct Sort</p>
           <ul className="text-xs text-pink-700 space-y-0.5 list-disc list-inside">
+            <li><strong>Please use the same format columns in the Excel file (must include &apos;SKU&apos; and &apos;Origin&apos;).</strong></li>
             <li>Single Qty labels first → then Multiple Qty labels</li>
-            <li>Within each group: sorted by SKU → Delivery Partner → Seller Account Name</li>
+            <li>Within each group: sorted by Origin → SKU → Delivery Partner → Store Name</li>
             <li>Stamps <strong>mapped letter (e.g., Y, J, H)</strong> in large bold font at the top-right of Customer Address</li>
+            <li>Stamps <strong>Origin Name</strong> and count at the bottom of the page</li>
           </ul>
         </div>
       </div>
@@ -407,9 +486,98 @@ export default function MeeshoDirectSort({
           />
         </div>
 
+        <div>
+          <label htmlFor="direct-csv" className="block text-sm font-medium text-gray-700 mb-2">
+            Upload CSV or Excel File
+          </label>
+          <div className={`mt-1 flex justify-center px-6 pt-5 pb-6 border-2 border-dashed rounded-lg transition-colors ${
+            selectedCsvFile ? 'border-green-400 bg-green-50' : 'border-gray-300 hover:border-pink-400'
+          }`}>
+            <div className="space-y-1 text-center w-full">
+              {selectedCsvFile ? (
+                <>
+                  <svg className="mx-auto h-12 w-12 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <div className="mt-3 px-4 py-2 bg-green-100 rounded-lg border border-green-300">
+                    <div className="flex items-center justify-start gap-2">
+                      <svg className="w-5 h-5 text-green-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                      </svg>
+                      <div className="flex-1 min-w-0 text-left">
+                        <div className="text-sm font-semibold text-green-800 truncate" title={selectedCsvFile.name}>
+                          {selectedCsvFile.name}
+                        </div>
+                        <div className="text-xs text-green-700 font-medium mt-0.5">
+                          Size: {(selectedCsvFile.size / 1024).toFixed(2)} KB
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <label htmlFor="direct-csv" className="mt-2 block text-xs text-gray-500 cursor-pointer hover:text-pink-600">
+                    Click to change file
+                  </label>
+                </>
+              ) : (
+                <>
+                  <svg className="mx-auto h-12 w-12 text-gray-400" stroke="currentColor" fill="none" viewBox="0 0 48 48">
+                    <path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  <div className="flex justify-center text-sm text-gray-600">
+                    <label htmlFor="direct-csv" className="relative cursor-pointer bg-white rounded-md font-medium text-pink-600 hover:text-pink-500">
+                      <span>Upload a file</span>
+                    </label>
+                    <p className="pl-1">or drag and drop</p>
+                  </div>
+                  <p className="text-xs text-gray-500">CSV or Excel (.xlsx, .xls)</p>
+                </>
+              )}
+            </div>
+          </div>
+          <input
+            type="file"
+            id="direct-csv"
+            name="direct-csv"
+            accept=".csv,.xlsx,.xls"
+            required
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              setSelectedCsvFile(file || null);
+            }}
+            className="sr-only"
+          />
+        </div>
+
+        {/* Selected Files Summary */}
+        {(selectedPdfFile || selectedCsvFile) && (
+          <div className="p-3 bg-pink-50 border border-pink-200 rounded-lg">
+            <p className="text-xs font-medium text-pink-700 mb-2">Ready to process:</p>
+            <div className="space-y-1 text-xs">
+              {selectedPdfFile && (
+                <div className="flex items-center gap-2 text-pink-900">
+                  <svg className="w-4 h-4 text-pink-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                  </svg>
+                  <span className="font-medium">PDF:</span>
+                  <span className="truncate">{selectedPdfFile.name}</span>
+                </div>
+              )}
+              {selectedCsvFile && (
+                <div className="flex items-center gap-2 text-pink-900">
+                  <svg className="w-4 h-4 text-pink-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                  </svg>
+                  <span className="font-medium">CSV:</span>
+                  <span className="truncate">{selectedCsvFile.name}</span>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         <button
           type="submit"
-          disabled={loading || allowed === false || allowed === null || !selectedPdfFile}
+          disabled={loading || allowed === false || allowed === null || !selectedPdfFile || !selectedCsvFile}
           className="w-full flex justify-center items-center py-3 px-4 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-pink-600 hover:bg-pink-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-pink-500 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
         >
           {loading ? (
