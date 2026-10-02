@@ -30,7 +30,8 @@ import {
   FaTruck,
   FaShoppingBag,
   FaTag,
-  FaUndo
+  FaUndo,
+  FaFileInvoiceDollar
 } from "react-icons/fa";
 import { SiAmazon, SiFlipkart } from "react-icons/si";
 
@@ -365,6 +366,10 @@ const Layout = ({ children }) => {
               
               {user && (user.role === USER_ROLES.ADMINISTRATOR || hasSettingsAccess(user)) && (
                 <NavItem href="/settings" icon={FaCog} label="Settings" />
+              )}
+              
+              {user && user.role === USER_ROLES.ADMINISTRATOR && (
+                <NavItem href="/admin" icon={FaFileInvoiceDollar} label="Invoicing & Admin" />
               )}
             </ul>
           </div>
