@@ -309,3 +309,94 @@ textarea {
 .animate-float-delayed {
   animation: float-delayed 8s ease-in-out infinite;
 }
+
+/* ===================================
+   INVOICE & DOCUMENT PRINT STYLES
+   =================================== */
+@media print {
+  /* Reset document for clean paper printing */
+  html, body {
+    height: auto !important;
+    min-height: 100% !important;
+    overflow: visible !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  /* Hide app navigation and standard elements outside Next.js root */
+  body > *:not(#__next),
+  nav, header, aside, footer, #navbar, .sidebar, .sidebar-submenu {
+    display: none !important;
+  }
+
+  /* Hide DOM elements by default when printing */
+  body * {
+    visibility: hidden;
+  }
+
+  /* Unhide invoice modal overlay and children */
+  .invoice-modal-overlay,
+  .invoice-modal-overlay * {
+    visibility: visible;
+  }
+
+  /* Overlay becomes full-width white page */
+  .invoice-modal-overlay {
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+    height: auto !important;
+    min-height: 100% !important;
+    background: #ffffff !important;
+    background-color: #ffffff !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    overflow: visible !important;
+    display: block !important;
+    z-index: 999999 !important;
+  }
+
+  /* Remove modal card boundaries, box shadows and borders */
+  .invoice-modal-card {
+    position: static !important;
+    box-shadow: none !important;
+    border: none !important;
+    border-radius: 0 !important;
+    max-width: 100% !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    background: #ffffff !important;
+  }
+
+  /* Printable invoice sheet takes standard margins */
+  .invoice-modal-sheet {
+    max-height: none !important;
+    overflow: visible !important;
+    padding: 6mm 10mm !important;
+    margin: 0 !important;
+    width: 100% !important;
+    box-sizing: border-box !important;
+  }
+
+  /* Hide header action bar and bottom close button */
+  .no-print,
+  .no-print * {
+    display: none !important;
+  }
+
+  /* Preserve full contrast and exact colors on print */
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  @page {
+    size: A4 portrait;
+    margin: 6mm;
+  }
+}

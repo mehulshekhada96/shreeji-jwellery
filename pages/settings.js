@@ -1,13 +1,16 @@
 import React, { useEffect, useState } from 'react';
+import { useRouter } from 'next/router';
 import SectionManager from '../components/sections';
 import ItemsManager from '../components/items';
 import WorkerDetails from '../components/WorkerDetails';
 import PartyDashboard from './party_dashboard';
 import PartyDetails from '../components/partyDetails';
+import CompanyInvoicesList from '../components/CompanyInvoicesList';
 import { checkPermission, PERMISSIONS, USER_ROLES } from '../lib/constants';
 import axios from 'axios';
 
 const SettingsTabs = () => {
+  const router = useRouter();
   const [selectedTab, setSelectedTab] = useState();
   const [user, setUser] = useState(null);
   const [flags, setFlags] = useState(null);
@@ -19,8 +22,16 @@ const SettingsTabs = () => {
     }
   }, []);
 
+  // Handle URL tab query
+  useEffect(() => {
+    if (router.query.tab) {
+      setSelectedTab(router.query.tab);
+    }
+  }, [router.query.tab]);
+
   // Set default tab based on permissions and feature flags
   useEffect(() => {
+    if (router.query.tab) return;
     if (user && flags) {
       // Only set tab if user has permission AND feature flag is enabled
       switch (true) {
@@ -39,9 +50,12 @@ const SettingsTabs = () => {
         case user?.role === USER_ROLES.ADMINISTRATOR:
           setSelectedTab('featureFlags');
           break;
+        case user?.role === USER_ROLES.ADMIN:
+          setSelectedTab('invoices');
+          break;
       }
     }
-  }, [user, flags]);
+  }, [user, flags, router.query.tab]);
 
   useEffect(() => {
     const fetchFlags = async () => {
@@ -122,6 +136,15 @@ const SettingsTabs = () => {
                   selectedTab === 'featureFlags' ? 'bg-blue-500 text-white' : 'bg-gray-200 text-black'
                 }`}>
                 Feature Flags
+              </button>
+            )}
+            {(user?.role === USER_ROLES.ADMIN || user?.role === USER_ROLES.ADMINISTRATOR) && (
+              <button
+                onClick={() => setSelectedTab('invoices')}
+                className={`px-4 py-2 rounded font-medium transition ${
+                  selectedTab === 'invoices' ? 'bg-blue-600 text-white shadow-sm' : 'bg-gray-200 text-black hover:bg-gray-300'
+                }`}>
+                Invoices & Billing
               </button>
             )}
           </div>
@@ -253,6 +276,11 @@ const SettingsTabs = () => {
                 ) : (
                   <p className="text-sm text-gray-500">Loading flags…</p>
                 )}
+              </div>
+            )}
+            {selectedTab === 'invoices' && (user?.role === USER_ROLES.ADMIN || user?.role === USER_ROLES.ADMINISTRATOR) && (
+              <div className="mt-4">
+                <CompanyInvoicesList />
               </div>
             )}
           </div>
