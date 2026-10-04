@@ -249,6 +249,16 @@ export default function AmazonSort({
 
       if (orderData.length === 0) throw new Error('No valid Amazon orders found.');
 
+      const originCounts = {};
+      if (dataFile) {
+        orderData.forEach((order) => {
+          const group = order.isCombo ? 'combo' : 'single';
+          const origin = (order.originName || 'Unknown Origin').trim();
+          const groupKey = `${group}_${origin}`;
+          originCounts[groupKey] = (originCounts[groupKey] || 0) + 1;
+        });
+      }
+
       orderData.sort((a, b) => {
         const pA = a.isCombo ? 1 : 0;
         const pB = b.isCombo ? 1 : 0;
@@ -256,11 +266,25 @@ export default function AmazonSort({
         if (dataFile) {
           const originA = (a.originName || 'Unknown Origin').trim();
           const originB = (b.originName || 'Unknown Origin').trim();
-          const isUnknownA = originA.toLowerCase() === 'unknown origin';
-          const isUnknownB = originB.toLowerCase() === 'unknown origin';
-          if (isUnknownA && !isUnknownB) return 1;
-          if (!isUnknownA && isUnknownB) return -1;
-          if (originA !== originB) return originA.localeCompare(originB, undefined, { sensitivity: 'base' });
+          if (originA !== originB) {
+            const isUnkA = !originA || originA.toLowerCase() === 'unknown origin';
+            const isUnkB = !originB || originB.toLowerCase() === 'unknown origin';
+            const isZA = !isUnkA && originA.toLowerCase().startsWith('z');
+            const isZB = !isUnkB && originB.toLowerCase().startsWith('z');
+            const tierA = isUnkA ? 2 : (isZA ? 1 : 0);
+            const tierB = isUnkB ? 2 : (isZB ? 1 : 0);
+            if (tierA !== tierB) return tierA - tierB;
+
+            if (tierA === 0) {
+              const groupA = a.isCombo ? 'combo' : 'single';
+              const groupB = b.isCombo ? 'combo' : 'single';
+              const countA = originCounts[`${groupA}_${originA}`] || 0;
+              const countB = originCounts[`${groupB}_${originB}`] || 0;
+              if (countA !== countB) return countA - countB;
+            }
+
+            return originA.localeCompare(originB, undefined, { sensitivity: 'base' });
+          }
         }
         const skuA = String(a.sku || '');
         const skuB = String(b.sku || '');
@@ -268,18 +292,15 @@ export default function AmazonSort({
         return a.qty - b.qty;
       });
 
-      const originCounts = {};
       const firstOriginIndex = {};
       if (dataFile) {
         orderData.forEach((order, index) => {
           const group = order.isCombo ? 'combo' : 'single';
-          const origin = order.originName || 'Unknown Origin';
+          const origin = (order.originName || 'Unknown Origin').trim();
           const groupKey = `${group}_${origin}`;
-          if (!originCounts[groupKey]) {
-            originCounts[groupKey] = 0;
+          if (firstOriginIndex[groupKey] === undefined) {
             firstOriginIndex[groupKey] = index;
           }
-          originCounts[groupKey]++;
         });
       }
 
@@ -291,7 +312,7 @@ export default function AmazonSort({
       for (let i = 0; i < orderData.length; i++) {
         const order = orderData[i];
         const [copied] = await outPdf.copyPages(sourcePdfDoc, [order.firstPageNumber - 1]);
-        const originLabel = order.originName || 'Unknown Origin';
+        const originLabel = (order.originName || 'Unknown Origin').trim();
         const group = order.isCombo ? 'combo' : 'single';
         const groupKey = `${group}_${originLabel}`;
         const isFirstOfOrigin = dataFile && firstOriginIndex[groupKey] === i;

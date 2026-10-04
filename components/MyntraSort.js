@@ -263,9 +263,20 @@ export default function MyntraSort({
         throw new Error('No valid Myntra shipping labels found in the PDF.');
       }
 
+      // Count occurrences of each origin per group (Priority 0: Single, Priority 1: Combo)
+      const originCounts = {};
+      pageData.forEach((page) => {
+        const p = page.isCombo ? 1 : 0;
+        const origin = (page.originName || 'Unknown Origin').trim();
+        if (origin && origin.toLowerCase() !== 'unknown origin') {
+          const groupKey = `${p}_${origin}`;
+          originCounts[groupKey] = (originCounts[groupKey] || 0) + 1;
+        }
+      });
+
       // SORTING LOGIC:
       // 1. Single orders (isCombo === false) FIRST (Priority 0). Multi/Combo (isCombo === true) NEXT (Priority 1).
-      // 2. Origin Name (Known origins A-Z first, including V,W,X,Y,Z; 'Unknown Origin' ALWAYS at the end)
+      // 2. Origin Name (Count-wise ascending, Unknown Origin at end)
       // 3. Primary SKU Name (alphabetically)
       // 4. Total Quantity (ascending)
       pageData.sort((a, b) => {
@@ -276,13 +287,25 @@ export default function MyntraSort({
         const originA = (a.originName || 'Unknown Origin').trim();
         const originB = (b.originName || 'Unknown Origin').trim();
 
-        const isUnknownA = originA.toLowerCase() === 'unknown origin';
-        const isUnknownB = originB.toLowerCase() === 'unknown origin';
+        if (originA !== originB) {
+          const isUnkA = !originA || originA.toLowerCase() === 'unknown origin';
+          const isUnkB = !originB || originB.toLowerCase() === 'unknown origin';
+          const isZA = !isUnkA && originA.toLowerCase().startsWith('z');
+          const isZB = !isUnkB && originB.toLowerCase().startsWith('z');
+          const tierA = isUnkA ? 2 : (isZA ? 1 : 0);
+          const tierB = isUnkB ? 2 : (isZB ? 1 : 0);
+          if (tierA !== tierB) return tierA - tierB;
 
-        // Known origins come before Unknown Origin (even V, W, X, Y, Z)
-        if (isUnknownA && !isUnknownB) return 1;
-        if (!isUnknownA && isUnknownB) return -1;
-        if (originA !== originB) return originA.localeCompare(originB, undefined, { sensitivity: 'base' });
+          if (tierA === 0) {
+            const groupKeyA = `${pA}_${originA}`;
+            const groupKeyB = `${pB}_${originB}`;
+            const countA = originCounts[groupKeyA] || 0;
+            const countB = originCounts[groupKeyB] || 0;
+            if (countA !== countB) return countA - countB;
+          }
+
+          return originA.localeCompare(originB, undefined, { sensitivity: 'base' });
+        }
 
         const skuA = String(a.primarySku || '');
         const skuB = String(b.primarySku || '');
@@ -291,16 +314,15 @@ export default function MyntraSort({
         return a.totalQty - b.totalQty;
       });
 
-      // Count occurrences of each origin and track first page index of each origin
-      const originCounts = {};
+      // Track first occurrence index of each origin in each group
       const firstOriginIndex = {};
       pageData.forEach((page, index) => {
-        const origin = page.originName || 'Unknown Origin';
-        if (!originCounts[origin]) {
-          originCounts[origin] = 0;
-          firstOriginIndex[origin] = index;
+        const p = page.isCombo ? 1 : 0;
+        const origin = (page.originName || 'Unknown Origin').trim();
+        const groupKey = `${p}_${origin}`;
+        if (firstOriginIndex[groupKey] === undefined) {
+          firstOriginIndex[groupKey] = index;
         }
-        originCounts[origin]++;
       });
 
       setStatus('Building sorted Myntra PDF...');
@@ -323,8 +345,11 @@ export default function MyntraSort({
           const it = pageInfo.items[idx];
           const itemOrigin = it.origin || 'Unknown Origin';
           
-          const isFirstOfOrigin = firstOriginIndex[originLabel] === i || firstOriginIndex[itemOrigin] === i;
-          const totalOriginCount = originCounts[originLabel] || originCounts[itemOrigin] || 0;
+          const p = pageInfo.isCombo ? 1 : 0;
+          const originTrimmed = (originLabel || '').trim();
+          const groupKey = `${p}_${originTrimmed}`;
+          const isFirstOfOrigin = firstOriginIndex[groupKey] === i;
+          const totalOriginCount = originCounts[groupKey] || 0;
           const showCount = isFirstOfOrigin && totalOriginCount > 0;
           const countStr = (showCount && idx === 0) ? `   (${totalOriginCount})` : '';
 
