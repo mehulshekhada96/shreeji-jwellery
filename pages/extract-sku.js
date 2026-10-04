@@ -746,25 +746,48 @@ export default function ExtractSKU() {
         throw new Error('No pages with Customer Address found in the PDF. Please check your PDF file.');
       }
 
+      // Count occurrences of each origin (excluding "Unknown Origin")
+      const originCounts = {};
+      pageData.forEach((page) => {
+        const origin = (page.originName || '').trim();
+        if (origin && origin.toLowerCase() !== 'unknown origin') {
+          originCounts[origin] = (originCounts[origin] || 0) + 1;
+        }
+      });
+
       pageData.sort((a, b) => {
         const qtyA = a.qty || 0; const qtyB = b.qty || 0;
         if (qtyA !== qtyB) return qtyA - qtyB;
-        const originA = a.originName || ''; const originB = b.originName || '';
-        if (originA !== originB) return originA.localeCompare(originB);
+
+        const originA = (a.originName || '').trim();
+        const originB = (b.originName || '').trim();
+        if (originA !== originB) {
+          const isEndA = !originA || originA.toLowerCase() === 'unknown origin' || originA.toLowerCase().startsWith('z');
+          const isEndB = !originB || originB.toLowerCase() === 'unknown origin' || originB.toLowerCase().startsWith('z');
+          if (isEndA !== isEndB) return isEndA ? 1 : -1;
+
+          // Count-wise sorting is applicable up to Y (not for unknown and not for origins starting with z)
+          if (!isEndA) {
+            const countA = originCounts[originA] || 0;
+            const countB = originCounts[originB] || 0;
+            if (countA !== countB) return countA - countB;
+          }
+
+          return originA.localeCompare(originB);
+        }
+
         const companyA = a.company || ''; const companyB = b.company || '';
         return companyA.localeCompare(companyB);
       });
 
-      // Count occurrences of each origin (excluding "Unknown Origin")
-      const originCounts = {};
-      const firstOriginIndex = {}; // Track first occurrence index of each origin
+      // Track first occurrence index of each origin
+      const firstOriginIndex = {};
       pageData.forEach((page, index) => {
-        if (page.originName && page.originName !== 'Unknown Origin') {
-          if (!originCounts[page.originName]) {
-            originCounts[page.originName] = 0;
-            firstOriginIndex[page.originName] = index;
+        const origin = (page.originName || '').trim();
+        if (origin && origin.toLowerCase() !== 'unknown origin') {
+          if (firstOriginIndex[origin] === undefined) {
+            firstOriginIndex[origin] = index;
           }
-          originCounts[page.originName]++;
         }
       });
 
@@ -778,9 +801,10 @@ export default function ExtractSKU() {
         const [copied] = await outPdf.copyPages(sourcePdfDoc, [page.pageNumber - 1]);
         
         // Check if this is the first page of this origin and origin is not "Unknown Origin"
-        const isFirstOfOrigin = firstOriginIndex[page.originName] === i;
-        const hasMultiplePages = originCounts[page.originName] > 1;
-        const showCount = isFirstOfOrigin && hasMultiplePages && page.originName !== 'Unknown Origin';
+        const origin = (page.originName || '').trim();
+        const isFirstOfOrigin = firstOriginIndex[origin] === i;
+        const hasMultiplePages = (originCounts[origin] || 0) > 1;
+        const showCount = isFirstOfOrigin && hasMultiplePages && origin && origin.toLowerCase() !== 'unknown origin';
         
         // Get page dimensions
         const { width, height } = copied.getSize();
