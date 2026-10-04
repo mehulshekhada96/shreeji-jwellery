@@ -180,12 +180,15 @@ export default function SnapdealSort({
         const qty = extractSnapdealQuantity(lines);
         const company = extractSnapdealCompany(lines) || 'Zzzzz';
 
-        // Check if page has TAX INVOICE and no valid SKU found (SKU starts with "Page_")
+        // Skip pure invoice pages — they have TAX INVOICE but none of the
+        // shipping-label-specific keywords (DELIVERY ADDRESS, SUBORDER CODE).
+        // Using label keywords (not SKU validity) prevents invoice pages whose
+        // table text accidentally produces a non-Page_ SKU from slipping through.
         const hasInvoice = pageText.includes('TAX INVOICE');
-        const hasNoValidSKU = sku.startsWith('Page_');
+        const hasLabelContent =
+          pageText.includes('DELIVERY ADDRESS') || pageText.includes('SUBORDER CODE');
 
-        // Skip pages with TAX INVOICE but no SKU found
-        if (hasInvoice && hasNoValidSKU) {
+        if (hasInvoice && !hasLabelContent) {
           continue;
         }
 
