@@ -323,7 +323,7 @@ export default function SnapdealSort({
             ? skuTotalQty[pageInfo.sku || '']
             : null;
         if (totalQty != null) {
-          const totalText = `Total Qty: ${totalQty}`;
+          const totalText = ` (${totalQty})`;
           const totalWidth = font.widthOfTextAtSize(totalText, 14);
           copied.drawText(totalText, {
             x: cropWidth - totalWidth - 20,
