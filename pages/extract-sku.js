@@ -762,12 +762,16 @@ export default function ExtractSKU() {
         const originA = (a.originName || '').trim();
         const originB = (b.originName || '').trim();
         if (originA !== originB) {
-          const isEndA = !originA || originA.toLowerCase() === 'unknown origin' || originA.toLowerCase().startsWith('z');
-          const isEndB = !originB || originB.toLowerCase() === 'unknown origin' || originB.toLowerCase().startsWith('z');
-          if (isEndA !== isEndB) return isEndA ? 1 : -1;
+          const isUnkA = !originA || originA.toLowerCase() === 'unknown origin';
+          const isUnkB = !originB || originB.toLowerCase() === 'unknown origin';
+          const isZA = !isUnkA && originA.toLowerCase().startsWith('z');
+          const isZB = !isUnkB && originB.toLowerCase().startsWith('z');
+          const tierA = isUnkA ? 2 : (isZA ? 1 : 0);
+          const tierB = isUnkB ? 2 : (isZB ? 1 : 0);
+          if (tierA !== tierB) return tierA - tierB;
 
-          // Count-wise sorting is applicable up to Y (not for unknown and not for origins starting with z)
-          if (!isEndA) {
+          // Count-wise sorting is applicable up to Y (tier 0)
+          if (tierA === 0) {
             const countA = originCounts[originA] || 0;
             const countB = originCounts[originB] || 0;
             if (countA !== countB) return countA - countB;

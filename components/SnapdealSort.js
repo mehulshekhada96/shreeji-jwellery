@@ -24,30 +24,52 @@ export default function SnapdealSort({
     let name;
     const SKUIndex = lines.findIndex(line => line.includes('SUBORDER CODE'));
     if (SKUIndex > -1) {
-      const withPipeline = lines[SKUIndex + 1]?.trim()?.split('  ')?.[0]?.trim();
-      name = withPipeline?.split('|')?.[1]?.trim();
+      const line = lines[SKUIndex + 1]?.trim() || '';
+      const pipeIdx = line.indexOf('|');
+      if (pipeIdx > -1) {
+        const afterPipe = line.slice(pipeIdx + 1).trim();
+        const m = afterPipe.match(/^(.*?)(?:\s+\d+)$/);
+        name = m ? m[1].trim() : afterPipe;
+      } else {
+        const withPipeline = line.split(/\s{2,}/)?.[0]?.trim();
+        name = withPipeline?.split('|')?.[1]?.trim();
+      }
     } else {
       const PRODUCTNameIndex = lines.findIndex(line => line.includes('PRODUCT NAME'));
       if (PRODUCTNameIndex > -1) {
-        // Find the next line (after PRODUCTNameIndex) that has the same number of elements when split with "  "
-        const baseLine = lines[PRODUCTNameIndex];
-        if (baseLine) {
-          const fieldsCount = baseLine.split('  ').length;
-          // Search ahead for the next line with the same fields count
-          for (let j = PRODUCTNameIndex + 1; j < lines.length; j++) {
-            const arr = lines[j]?.split('  ');
-            if (arr && arr.length === fieldsCount) {
-              // The last element should be the quantity
-              name = arr[0]?.trim();
-              if (name?.includes('|')) {
-                name = name?.split('|')?.[1]?.trim();
+        const candidateSku = lines[PRODUCTNameIndex + 2]?.trim();
+        const candidateQty = lines[PRODUCTNameIndex + 3]?.trim();
+        if (candidateSku && candidateQty && /^\d+$/.test(candidateQty)) {
+          name = candidateSku;
+          if (name?.includes('|')) {
+            name = name.split('|')[1]?.trim();
+          }
+        } else {
+          const baseLine = lines[PRODUCTNameIndex];
+          if (baseLine) {
+            const fieldsCount = baseLine.split('  ').length;
+            for (let j = PRODUCTNameIndex + 1; j < lines.length; j++) {
+              const arr = lines[j]?.split('  ');
+              if (arr && arr.length === fieldsCount) {
+                name = arr[0]?.trim();
+                if (name?.includes('|')) {
+                  name = name?.split('|')?.[1]?.trim();
+                }
+                break;
               }
-              break;
             }
           }
         }
       }
     }
+
+    if (!name || name.startsWith('Page_')) {
+      const skuCodeLine = lines.find(l => /SKU\s*CODE\s*:/i.test(l));
+      if (skuCodeLine) {
+        name = skuCodeLine.replace(/.*SKU\s*CODE\s*:\s*/i, '').trim();
+      }
+    }
+
     return name || `Page_${i}`;
   }
 
@@ -56,25 +78,48 @@ export default function SnapdealSort({
     // Try SUBORDER CODE row first (quantity is last column on next line)
     const SKUIndex = lines.findIndex(line => line.includes('SUBORDER CODE'));
     if (SKUIndex > -1) {
-      const numberWithSpace = lines[SKUIndex + 1]?.trim()?.split('  ')?.pop()?.trim();
-      qty = Number(numberWithSpace);
+      const line = lines[SKUIndex + 1]?.trim() || '';
+      const m = line.match(/\s+(\d+)\s*$/);
+      if (m) {
+        qty = Number(m[1]);
+      } else {
+        const numberWithSpace = line.split(/\s{2,}/)?.pop()?.trim();
+        qty = Number(numberWithSpace);
+      }
     }
-    // If no valid quantity from SUBORDER CODE, try PRODUCT NAME row (next line with same field count; last element is quantity)
+
+    // If no valid quantity from SUBORDER CODE, try PRODUCT NAME row
     if (Number.isNaN(qty) && lines.findIndex(line => line.includes('PRODUCT NAME')) > -1) {
       const PRODUCTNameIndex = lines.findIndex(line => line.includes('PRODUCT NAME'));
-      const baseLine = lines[PRODUCTNameIndex];
-      if (baseLine) {
-        const fieldsCount = baseLine.split('  ').length;
-        for (let j = PRODUCTNameIndex + 1; j < lines.length; j++) {
-          const arr = lines[j]?.split('  ');
-          if (arr && arr.length === fieldsCount) {
-            qty = Number(arr[arr.length - 1]);
-            break;
+      const candidateQty = lines[PRODUCTNameIndex + 3]?.trim();
+      if (candidateQty && /^\d+$/.test(candidateQty)) {
+        qty = Number(candidateQty);
+      } else {
+        const baseLine = lines[PRODUCTNameIndex];
+        if (baseLine) {
+          const fieldsCount = baseLine.split('  ').length;
+          for (let j = PRODUCTNameIndex + 1; j < lines.length; j++) {
+            const arr = lines[j]?.split('  ');
+            if (arr && arr.length === fieldsCount) {
+              qty = Number(arr[arr.length - 1]);
+              break;
+            }
           }
         }
       }
     }
-    return Number.isNaN(qty) ? 0 : (qty || 0);
+
+    // Fallback: check invoice "TOTAL ITEMS" or "ITEMS <number>"
+    if (Number.isNaN(qty) || qty <= 0) {
+      const totalItemsLine = lines.find(l => /TOTAL\s*ITEMS\s*(\d+)/i.test(l) || /ITEMS\s+(\d+)/i.test(l));
+      if (totalItemsLine) {
+        const m = totalItemsLine.match(/(?:TOTAL\s*ITEMS\s*|ITEMS\s+)(\d+)/i);
+        if (m) qty = Number(m[1]);
+      }
+    }
+
+    // Final fallback: every shipping label order is at least 1
+    return (Number.isNaN(qty) || qty <= 0) ? 1 : qty;
   }
 
   function extractSnapdealCompany(lines) {
@@ -146,32 +191,54 @@ export default function SnapdealSort({
 
         let originName = 'Unknown Origin';
         if (csvData.length && skuKey && originKey) {
-          const row = csvData.find(r => String(r[skuKey]).trim() === String(sku).trim());
+          const cleanSku = String(sku || '').trim().toLowerCase();
+          const row = csvData.find(r => String(r[skuKey] || '').trim().toLowerCase() === cleanSku);
           if (row) originName = String(row[originKey] || '').trim() || originName;
         }
 
         pageData.push({ pageNumber: i, sku, qty, originName, company });
       }
 
-      const UNKNOWN_ORIGIN = 'Unknown Origin';
-      const isUnknown = (o) => (o || '') === UNKNOWN_ORIGIN;
       const hasValidCsv = csvFile && csvData.length > 0;
+
+      // Count occurrences of each origin (excluding "Unknown Origin")
+      const originCounts = {};
+      if (hasValidCsv) {
+        pageData.forEach((page) => {
+          const origin = (page.originName || '').trim();
+          if (origin && origin.toLowerCase() !== 'unknown origin') {
+            originCounts[origin] = (originCounts[origin] || 0) + 1;
+          }
+        });
+      }
 
       pageData.sort((a, b) => {
         if (hasValidCsv) {
-          // 1) Known origins first, Unknown Origin last
-          const aUnknown = isUnknown(a.originName);
-          const bUnknown = isUnknown(b.originName);
-          if (aUnknown !== bUnknown) return aUnknown ? 1 : -1; // known first (a unknown → a after b)
+          const originA = (a.originName || '').trim();
+          const originB = (b.originName || '').trim();
 
-          // 2) Both Unknown Origin: sort by SKU
-          if (aUnknown && bUnknown) {
-            return (a.sku || '').localeCompare(b.sku || '');
+          if (originA !== originB) {
+            const isUnkA = !originA || originA.toLowerCase() === 'unknown origin';
+            const isUnkB = !originB || originB.toLowerCase() === 'unknown origin';
+            const isZA = !isUnkA && originA.toLowerCase().startsWith('z');
+            const isZB = !isUnkB && originB.toLowerCase().startsWith('z');
+            const tierA = isUnkA ? 2 : (isZA ? 1 : 0);
+            const tierB = isUnkB ? 2 : (isZB ? 1 : 0);
+            if (tierA !== tierB) return tierA - tierB;
+
+            if (tierA === 0) {
+              const countA = originCounts[originA] || 0;
+              const countB = originCounts[originB] || 0;
+              if (countA !== countB) return countA - countB;
+            }
+
+            return originA.localeCompare(originB);
           }
 
-          // 3) Both known: sort by origin name, then qty, then company
-          if (a.originName !== b.originName) return a.originName.localeCompare(b.originName);
           if (a.qty !== b.qty) return a.qty - b.qty;
+          const skuA = String(a.sku || '');
+          const skuB = String(b.sku || '');
+          if (skuA !== skuB) return skuA.localeCompare(skuB);
           return (a.company || '').localeCompare(b.company || '');
         } else {
           // No CSV: sort by quantity, then SKU, then company
@@ -189,8 +256,9 @@ export default function SnapdealSort({
 
       pageData.forEach((page, i) => {
         if (hasValidCsv) {
-          if (firstOriginIndex[page.originName] === undefined) firstOriginIndex[page.originName] = i;
-          originTotalQty[page.originName] = (originTotalQty[page.originName] || 0) + (page.qty || 0);
+          const origin = (page.originName || '').trim();
+          if (firstOriginIndex[origin] === undefined) firstOriginIndex[origin] = i;
+          originTotalQty[origin] = (originTotalQty[origin] || 0) + (page.qty || 0);
         } else {
           if (firstSkuIndex[page.sku || ''] === undefined) firstSkuIndex[page.sku || ''] = i;
           skuTotalQty[page.sku || ''] = (skuTotalQty[page.sku || ''] || 0) + (page.qty || 0);
@@ -246,15 +314,16 @@ export default function SnapdealSort({
         });
 
         // On first page of each origin (with CSV) or each SKU (no CSV), show total qty badge
-        const isFirstOfOrigin = hasValidCsv && firstOriginIndex[pageInfo.originName] === i && pageInfo.originName !== 'Unknown Origin';
+        const origin = (pageInfo.originName || '').trim();
+        const isFirstOfOrigin = hasValidCsv && firstOriginIndex[origin] === i && origin.toLowerCase() !== 'unknown origin';
         const isFirstOfSku = !hasValidCsv && firstSkuIndex[pageInfo.sku || ''] === i;
         const totalQty = isFirstOfOrigin
-          ? originTotalQty[pageInfo.originName]
+          ? originTotalQty[origin]
           : isFirstOfSku
             ? skuTotalQty[pageInfo.sku || '']
             : null;
         if (totalQty != null) {
-          const totalText = `Total Qty: ${totalQty}`;
+          const totalText = ` (${totalQty})`;
           const totalWidth = font.widthOfTextAtSize(totalText, 14);
           copied.drawText(totalText, {
             x: cropWidth - totalWidth - 20,

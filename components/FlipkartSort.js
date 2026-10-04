@@ -237,6 +237,17 @@ export default function FlipkartSort({
         throw new Error('No valid shipping labels found in the PDF.');
       }
 
+      // Count occurrences of each origin per priority group (Priority 0: Single-item, Priority 1: Multi-item)
+      const originCounts = {};
+      pageData.forEach((page) => {
+        const priority = (page.qty > 1) ? 1 : 0;
+        const origin = (page.originName || '').trim();
+        if (origin && origin.toLowerCase() !== 'unknown origin') {
+          const groupKey = `${priority}_${origin}`;
+          originCounts[groupKey] = (originCounts[groupKey] || 0) + 1;
+        }
+      });
+
       // Multi-Product Sorting:
       // Single-item orders (Qty=1) get Priority 0, Multi-item orders (Qty>1) get Priority 1
       pageData.sort((a, b) => {
@@ -244,10 +255,28 @@ export default function FlipkartSort({
         const priorityB = (b.qty > 1) ? 1 : 0;
         if (priorityA !== priorityB) return priorityA - priorityB;
 
-        // Secondary Sort: Origin Name (if available), otherwise SKU
-        const originA = a.originName || ''; 
-        const originB = b.originName || '';
-        if (originA !== originB) return originA.localeCompare(originB);
+        // Secondary Sort: Origin Name (Count-wise ascending for A-Y, Z origins after, Unknown Origin at end)
+        const originA = (a.originName || '').trim(); 
+        const originB = (b.originName || '').trim();
+        if (originA !== originB) {
+          const isUnkA = !originA || originA.toLowerCase() === 'unknown origin';
+          const isUnkB = !originB || originB.toLowerCase() === 'unknown origin';
+          const isZA = !isUnkA && originA.toLowerCase().startsWith('z');
+          const isZB = !isUnkB && originB.toLowerCase().startsWith('z');
+          const tierA = isUnkA ? 2 : (isZA ? 1 : 0);
+          const tierB = isUnkB ? 2 : (isZB ? 1 : 0);
+          if (tierA !== tierB) return tierA - tierB;
+
+          if (tierA === 0) {
+            const groupKeyA = `${priorityA}_${originA}`;
+            const groupKeyB = `${priorityB}_${originB}`;
+            const countA = originCounts[groupKeyA] || 0;
+            const countB = originCounts[groupKeyB] || 0;
+            if (countA !== countB) return countA - countB;
+          }
+
+          return originA.localeCompare(originB);
+        }
 
         // Tertiary Sort: SKU
         const skuA = String(a.sku || ''); 
@@ -260,16 +289,16 @@ export default function FlipkartSort({
         return companyA.localeCompare(companyB);
       });
 
-      // Count occurrences of each origin
-      const originCounts = {};
+      // Track first occurrence index of each origin in each priority group
       const firstOriginIndex = {};
       pageData.forEach((page, index) => {
-        if (page.originName && page.originName !== 'Unknown Origin') {
-          if (!originCounts[page.originName]) {
-            originCounts[page.originName] = 0;
-            firstOriginIndex[page.originName] = index;
+        const priority = (page.qty > 1) ? 1 : 0;
+        const origin = (page.originName || '').trim();
+        if (origin && origin.toLowerCase() !== 'unknown origin') {
+          const groupKey = `${priority}_${origin}`;
+          if (firstOriginIndex[groupKey] === undefined) {
+            firstOriginIndex[groupKey] = index;
           }
-          originCounts[page.originName]++;
         }
       });
 
@@ -346,9 +375,13 @@ export default function FlipkartSort({
           height: origHeight
         });
 
-        const isFirstOfOrigin = pageInfo.originName ? firstOriginIndex[pageInfo.originName] === i : false;
-        const hasMultiplePages = pageInfo.originName ? originCounts[pageInfo.originName] > 1 : false;
-        const showCount = isFirstOfOrigin && hasMultiplePages && pageInfo.originName !== null;
+        const priority = (pageInfo.qty > 1) ? 1 : 0;
+        const origin = (pageInfo.originName || '').trim();
+        const groupKey = `${priority}_${origin}`;
+        const isFirstOfOrigin = origin ? firstOriginIndex[groupKey] === i : false;
+        const totalCount = origin ? (originCounts[groupKey] || 0) : 0;
+        const hasMultiplePages = totalCount > 1;
+        const showCount = isFirstOfOrigin && hasMultiplePages && origin.toLowerCase() !== 'unknown origin';
 
         // Dynamic text positioning and scaling
         const scale = targetWidth / 240;
@@ -377,7 +410,7 @@ export default function FlipkartSort({
         }
         
         if (showCount) {
-          const count = originCounts[pageInfo.originName];
+          const count = originCounts[groupKey];
           const countText = `(${count})`;
           const countWidth = helveticaBoldFont.widthOfTextAtSize(countText, countFontSize);
           
