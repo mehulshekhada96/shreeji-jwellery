@@ -345,7 +345,7 @@ export default function MeeshoDirectSort({
           copied.drawText(`Origin : ${pageInfo.originName}`, { 
             x: 50, 
             y: 50, 
-            size: 14, 
+            size: 25, 
             font: boldFont,
             color: rgb(0, 0, 0)
           });
