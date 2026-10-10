@@ -34,6 +34,13 @@ export default function MyntraSort({
     return str;
   }
 
+  // Helper to normalize SKU for matching with Excel (replaces _ZXRIZ with "")
+  function normalizeSkuForMatching(rawStr) {
+    if (!rawStr) return '';
+    const clean = getCleanMyntraSku(rawStr);
+    return clean.replace(/_ZXRIZ/gi, '').trim().toLowerCase();
+  }
+
   // Parse Myntra SKU items from text lines
   function parseMyntraItems(lines) {
     const items = [];
@@ -218,12 +225,18 @@ export default function MyntraSort({
           const itemOrigins = [];
           for (const it of items) {
             const targetSku = String(it.sku || '').trim().toLowerCase();
+            const targetNormalized = normalizeSkuForMatching(it.sku);
+
             const row = csvData.find(r => {
               const csvSku = String(r[skuKey] || '').trim();
               if (!csvSku) return false;
               if (csvSku.toLowerCase() === targetSku) return true;
               const csvClean = getCleanMyntraSku(csvSku).toLowerCase();
-              return csvClean && csvClean === targetSku;
+              if (csvClean && csvClean === targetSku) return true;
+
+              // Match after replacing _ZXRIZ with ""
+              const csvNormalized = normalizeSkuForMatching(csvSku);
+              return !!(targetNormalized && csvNormalized && targetNormalized === csvNormalized);
             });
 
             if (row && row[originKey]) {
