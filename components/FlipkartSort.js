@@ -279,8 +279,8 @@ export default function FlipkartSort({
         });
 
         // If sizeKey exists, assign tier based on Size and label count:
-        // Tier 0: Small size SKUs with total SKU label count > 2
-        // Tier 1: Large size SKUs with total SKU label count > 2
+        // Tier 0: Large size SKUs with total SKU label count > 2
+        // Tier 1: Small size SKUs with total SKU label count > 2
         // Tier 2: All unknowns, total label count <= 2, and others
         pageData.forEach((page) => {
           if (sizeKey) {
@@ -288,9 +288,9 @@ export default function FlipkartSort({
             const count = skuLabelCounts[s] || 0;
             const normSize = String(page.size || '').trim().toLowerCase();
             if (count > 2) {
-              if (normSize === 'small') {
+              if (normSize === 'large') {
                 page.tier = 0;
-              } else if (normSize === 'large') {
+              } else if (normSize === 'small') {
                 page.tier = 1;
               } else {
                 page.tier = 2;
@@ -315,8 +315,8 @@ export default function FlipkartSort({
         });
 
         // Multi-Product Sorting:
-        // If Size column present: Tier 0 (Small > 2) -> Tier 1 (Large > 2) -> Tier 2 (<= 2 and Unknowns)
-        // Within each group: Single-item (Qty=1) -> Multi-item (Qty>1) -> Origin (count-wise ascending for A-Y, Z origins after, Unknown at end) -> SKU -> Company
+        // If Size column present: Tier 0 (Large > 2) -> Tier 1 (Small > 2) -> Tier 2 (<= 2 and Unknowns)
+        // Within each group: Single-item (Qty=1) -> Multi-item (Qty>1) -> Origin (count-wise descending for A-Y, Z origins after, Unknown at end) -> SKU -> Company
         pageData.sort((a, b) => {
           if (sizeKey && a.tier !== b.tier) {
             return a.tier - b.tier;
@@ -326,7 +326,7 @@ export default function FlipkartSort({
           const priorityB = (b.qty > 1) ? 1 : 0;
           if (priorityA !== priorityB) return priorityA - priorityB;
 
-          // Secondary Sort: Origin Name (Count-wise ascending for A-Y, Z origins after, Unknown Origin at end)
+          // Secondary Sort: Origin Name (Count-wise descending for A-Y, Z origins after, Unknown Origin at end)
           const originA = (a.originName || '').trim(); 
           const originB = (b.originName || '').trim();
           if (originA !== originB) {
@@ -343,7 +343,7 @@ export default function FlipkartSort({
               const groupKeyB = sizeKey ? `${b.tier}_${priorityB}_${originB}` : `${priorityB}_${originB}`;
               const countA = originCounts[groupKeyA] || 0;
               const countB = originCounts[groupKeyB] || 0;
-              if (countA !== countB) return countA - countB;
+              if (countA !== countB) return countB - countA;
             }
 
             return originA.localeCompare(originB);
@@ -663,7 +663,7 @@ export default function FlipkartSort({
             </div>
             <p className="text-xs text-gray-500 mt-1">
               {useNewSorting
-                ? 'Active: Size grouping (Small > 2, Large > 2, others) + Origin count-wise ascending sorting.'
+                ? 'Active: Size grouping (Large > 2, Small > 2, others) + Origin count-wise descending sorting.'
                 : 'Active: Standard production version (Alphabetical origin sorting).'}
             </p>
           </div>
