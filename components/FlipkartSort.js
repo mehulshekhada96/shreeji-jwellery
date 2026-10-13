@@ -18,6 +18,7 @@ export default function FlipkartSort({
   const [selectedFlipkartPdfFile, setSelectedFlipkartPdfFile] = useState(null);
   const [selectedFlipkartCsvFile, setSelectedFlipkartCsvFile] = useState(null);
   const [hasCsvFile, setHasCsvFile] = useState(false);
+  const [useNewSorting, setUseNewSorting] = useState(true);
 
   const companies = ['Valmo', 'Xpress Bees', 'ShadowFax', 'Delhivery', 'Ecom Express', 'Flipkart'].sort();
 
@@ -126,8 +127,16 @@ export default function FlipkartSort({
             const { read, utils } = await import('xlsx');
             const dataBuf = await readFileAsArrayBuffer(dataFile);
             const workbook = read(dataBuf, { type: 'array' });
-            const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-            data = utils.sheet_to_json(firstSheet);
+            let targetSheet = workbook.Sheets[workbook.SheetNames[0]];
+            for (const sheetName of workbook.SheetNames) {
+              const s = workbook.Sheets[sheetName];
+              const headerRow = utils.sheet_to_json(s, { header: 1 })?.[0] || [];
+              if (headerRow.some(h => String(h || '').trim().toUpperCase() === 'SKU')) {
+                targetSheet = s;
+                break;
+              }
+            }
+            data = utils.sheet_to_json(targetSheet);
           } else {
             setStatus('Parsing CSV...');
             const csvText = await readFileAsText(dataFile);
@@ -139,6 +148,20 @@ export default function FlipkartSort({
 
       const skuKey = csvData.length ? findHeaderKeyInsensitive(csvData[0], 'SKU') : null;
       const originKey = csvData.length ? findHeaderKeyInsensitive(csvData[0], 'Origin') || findHeaderKeyInsensitive(csvData[0], 'origin') : null;
+      const sizeKey = csvData.length ? findHeaderKeyInsensitive(csvData[0], 'Size') : null;
+
+      const skuMap = new Map();
+      if (dataFile && skuKey && csvData.length) {
+        for (const row of csvData) {
+          const rawVal = row[skuKey];
+          if (rawVal != null) {
+            const k = String(rawVal).trim().toLowerCase();
+            if (!skuMap.has(k)) {
+              skuMap.set(k, row);
+            }
+          }
+        }
+      }
 
       setStatus('Reading PDF...');
       const loadingTask = pdfjsLib.getDocument({ data: pdfArrayBuffer });
@@ -166,11 +189,16 @@ export default function FlipkartSort({
         const sku = extractFlipkartSKU(lines);
         const qty = extractFlipkartQuantity(lines);
         let originName = null; 
+        let size = null;
         if (dataFile) {
           originName = 'Unknown Origin'; // If file exists, default to Unknown
-          if (skuKey && sku) {
-            const originRow = csvData.find(row => String(row[skuKey]).trim() === String(sku).trim());
-            if (originRow && originKey) originName = originRow[originKey] || 'Unknown Origin';
+          if (sku) {
+            const cleanSku = String(sku).trim().toLowerCase();
+            const originRow = skuMap.get(cleanSku);
+            if (originRow) {
+              if (originKey && originRow[originKey]) originName = String(originRow[originKey]).trim() || 'Unknown Origin';
+              if (sizeKey && originRow[sizeKey]) size = String(originRow[sizeKey]).trim();
+            }
           }
         }
 
@@ -228,7 +256,7 @@ export default function FlipkartSort({
 
         const company = extractFlipkartCompany(lines);
         pageData.push({ 
-          pageNumber: i, sku, qty, originName, company, 
+          pageNumber: i, sku, qty, originName, size, company, 
           labelBottomY, fmpcY, minX, maxX, maxY, hasTaxInvoice 
         });
       }
@@ -237,41 +265,146 @@ export default function FlipkartSort({
         throw new Error('No valid shipping labels found in the PDF.');
       }
 
-      // Multi-Product Sorting:
-      // Single-item orders (Qty=1) get Priority 0, Multi-item orders (Qty>1) get Priority 1
-      pageData.sort((a, b) => {
-        const priorityA = (a.qty > 1) ? 1 : 0;
-        const priorityB = (b.qty > 1) ? 1 : 0;
-        if (priorityA !== priorityB) return priorityA - priorityB;
+      let originCounts = {};
+      let firstOriginIndex = {};
 
-        // Secondary Sort: Origin Name (if available), otherwise SKU
-        const originA = a.originName || ''; 
-        const originB = b.originName || '';
-        if (originA !== originB) return originA.localeCompare(originB);
-
-        // Tertiary Sort: SKU
-        const skuA = String(a.sku || ''); 
-        const skuB = String(b.sku || '');
-        if (skuA !== skuB) return skuA.localeCompare(skuB);
-
-        // Quaternary Sort: Company
-        const companyA = a.company || ''; 
-        const companyB = b.company || '';
-        return companyA.localeCompare(companyB);
-      });
-
-      // Count occurrences of each origin
-      const originCounts = {};
-      const firstOriginIndex = {};
-      pageData.forEach((page, index) => {
-        if (page.originName && page.originName !== 'Unknown Origin') {
-          if (!originCounts[page.originName]) {
-            originCounts[page.originName] = 0;
-            firstOriginIndex[page.originName] = index;
+      if (useNewSorting) {
+        // --- NEW VERSION (Size-based tiering + Count-wise ascending origins) ---
+        const skuLabelCounts = {};
+        pageData.forEach((page) => {
+          const s = String(page.sku || '').trim().toLowerCase();
+          if (s) {
+            skuLabelCounts[s] = (skuLabelCounts[s] || 0) + 1;
           }
-          originCounts[page.originName]++;
-        }
-      });
+        });
+
+        // If sizeKey exists, assign tier based on Size and label count:
+        // Tier 0: Small size SKUs with total SKU label count > 2
+        // Tier 1: Large size SKUs with total SKU label count > 2
+        // Tier 2: All unknowns, total label count <= 2, and others
+        pageData.forEach((page) => {
+          if (sizeKey) {
+            const s = String(page.sku || '').trim().toLowerCase();
+            const count = skuLabelCounts[s] || 0;
+            const normSize = String(page.size || '').trim().toLowerCase();
+            if (count > 2) {
+              if (normSize === 'small') {
+                page.tier = 0;
+              } else if (normSize === 'large') {
+                page.tier = 1;
+              } else {
+                page.tier = 2;
+              }
+            } else {
+              page.tier = 2;
+            }
+          } else {
+            page.tier = 0;
+          }
+        });
+
+        // Count occurrences of each origin per group (Priority 0: Single-item, Priority 1: Multi-item)
+        // When sizeKey is present, count within each size tier as well
+        pageData.forEach((page) => {
+          const priority = (page.qty > 1) ? 1 : 0;
+          const origin = (page.originName || '').trim();
+          if (origin && origin.toLowerCase() !== 'unknown origin') {
+            const groupKey = sizeKey ? `${page.tier}_${priority}_${origin}` : `${priority}_${origin}`;
+            originCounts[groupKey] = (originCounts[groupKey] || 0) + 1;
+          }
+        });
+
+        // Multi-Product Sorting:
+        // If Size column present: Tier 0 (Small > 2) -> Tier 1 (Large > 2) -> Tier 2 (<= 2 and Unknowns)
+        // Within each group: Single-item (Qty=1) -> Multi-item (Qty>1) -> Origin (count-wise ascending for A-Y, Z origins after, Unknown at end) -> SKU -> Company
+        pageData.sort((a, b) => {
+          if (sizeKey && a.tier !== b.tier) {
+            return a.tier - b.tier;
+          }
+
+          const priorityA = (a.qty > 1) ? 1 : 0;
+          const priorityB = (b.qty > 1) ? 1 : 0;
+          if (priorityA !== priorityB) return priorityA - priorityB;
+
+          // Secondary Sort: Origin Name (Count-wise ascending for A-Y, Z origins after, Unknown Origin at end)
+          const originA = (a.originName || '').trim(); 
+          const originB = (b.originName || '').trim();
+          if (originA !== originB) {
+            const isUnkA = !originA || originA.toLowerCase() === 'unknown origin';
+            const isUnkB = !originB || originB.toLowerCase() === 'unknown origin';
+            const isZA = !isUnkA && originA.toLowerCase().startsWith('z');
+            const isZB = !isUnkB && originB.toLowerCase().startsWith('z');
+            const originTierA = isUnkA ? 2 : (isZA ? 1 : 0);
+            const originTierB = isUnkB ? 2 : (isZB ? 1 : 0);
+            if (originTierA !== originTierB) return originTierA - originTierB;
+
+            if (originTierA === 0) {
+              const groupKeyA = sizeKey ? `${a.tier}_${priorityA}_${originA}` : `${priorityA}_${originA}`;
+              const groupKeyB = sizeKey ? `${b.tier}_${priorityB}_${originB}` : `${priorityB}_${originB}`;
+              const countA = originCounts[groupKeyA] || 0;
+              const countB = originCounts[groupKeyB] || 0;
+              if (countA !== countB) return countA - countB;
+            }
+
+            return originA.localeCompare(originB);
+          }
+
+          // Tertiary Sort: SKU
+          const skuA = String(a.sku || ''); 
+          const skuB = String(b.sku || '');
+          if (skuA !== skuB) return skuA.localeCompare(skuB);
+
+          // Quaternary Sort: Company
+          const companyA = a.company || ''; 
+          const companyB = b.company || '';
+          return companyA.localeCompare(companyB);
+        });
+
+        // Track first occurrence index of each origin in each priority/tier group
+        pageData.forEach((page, index) => {
+          const priority = (page.qty > 1) ? 1 : 0;
+          const origin = (page.originName || '').trim();
+          if (origin && origin.toLowerCase() !== 'unknown origin') {
+            const groupKey = sizeKey ? `${page.tier}_${priority}_${origin}` : `${priority}_${origin}`;
+            if (firstOriginIndex[groupKey] === undefined) {
+              firstOriginIndex[groupKey] = index;
+            }
+          }
+        });
+      } else {
+        // --- PRODUCTION VERSION (Classic: Single vs Multi, Alphabetical Origins) ---
+        pageData.sort((a, b) => {
+          const priorityA = (a.qty > 1) ? 1 : 0;
+          const priorityB = (b.qty > 1) ? 1 : 0;
+          if (priorityA !== priorityB) return priorityA - priorityB;
+
+          // Secondary Sort: Origin Name (if available), otherwise SKU
+          const originA = a.originName || ''; 
+          const originB = b.originName || '';
+          if (originA !== originB) return originA.localeCompare(originB);
+
+          // Tertiary Sort: SKU
+          const skuA = String(a.sku || ''); 
+          const skuB = String(b.sku || '');
+          if (skuA !== skuB) return skuA.localeCompare(skuB);
+
+          // Quaternary Sort: Company
+          const companyA = a.company || ''; 
+          const companyB = b.company || '';
+          return companyA.localeCompare(companyB);
+        });
+
+        // Count occurrences of each origin
+        pageData.forEach((page, index) => {
+          if (page.originName && page.originName !== 'Unknown Origin') {
+            if (!originCounts[page.originName]) {
+              originCounts[page.originName] = 0;
+              firstOriginIndex[page.originName] = index;
+            }
+            originCounts[page.originName]++;
+          }
+        });
+      }
 
       setStatus('Building output PDF...');
       const sourcePdfDoc = await PDFDocument.load(pdfArrayBuffer);
@@ -346,9 +479,15 @@ export default function FlipkartSort({
           height: origHeight
         });
 
-        const isFirstOfOrigin = pageInfo.originName ? firstOriginIndex[pageInfo.originName] === i : false;
-        const hasMultiplePages = pageInfo.originName ? originCounts[pageInfo.originName] > 1 : false;
-        const showCount = isFirstOfOrigin && hasMultiplePages && pageInfo.originName !== null;
+        const priority = (pageInfo.qty > 1) ? 1 : 0;
+        const origin = (pageInfo.originName || '').trim();
+        const groupKey = useNewSorting
+          ? (sizeKey ? `${pageInfo.tier}_${priority}_${origin}` : `${priority}_${origin}`)
+          : pageInfo.originName;
+        const isFirstOfOrigin = origin ? firstOriginIndex[groupKey] === i : false;
+        const totalCount = origin ? (originCounts[groupKey] || 0) : 0;
+        const hasMultiplePages = totalCount > 1;
+        const showCount = isFirstOfOrigin && hasMultiplePages && origin.toLowerCase() !== 'unknown origin';
 
         // Dynamic text positioning and scaling
         const scale = targetWidth / 240;
@@ -377,7 +516,7 @@ export default function FlipkartSort({
         }
         
         if (showCount) {
-          const count = originCounts[pageInfo.originName];
+          const count = originCounts[groupKey];
           const countText = `(${count})`;
           const countWidth = helveticaBoldFont.widthOfTextAtSize(countText, countFontSize);
           
@@ -508,6 +647,43 @@ export default function FlipkartSort({
             </p>
           </div>
         </div>
+
+        {/* Toggle between New Size+Count Sorting and Production Sorting */}
+        <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 flex items-center justify-between">
+          <div className="pr-4">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-semibold text-gray-800">
+                Size & Count-Based Sorting (New Version)
+              </span>
+              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                useNewSorting ? 'bg-green-100 text-green-800' : 'bg-gray-200 text-gray-700'
+              }`}>
+                {useNewSorting ? 'Enabled (Default)' : 'Disabled (Production Mode)'}
+              </span>
+            </div>
+            <p className="text-xs text-gray-500 mt-1">
+              {useNewSorting
+                ? 'Active: Size grouping (Small > 2, Large > 2, others) + Origin count-wise ascending sorting.'
+                : 'Active: Standard production version (Alphabetical origin sorting).'}
+            </p>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={useNewSorting}
+            onClick={() => setUseNewSorting(!useNewSorting)}
+            className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${
+              useNewSorting ? 'bg-blue-600' : 'bg-gray-300'
+            }`}
+          >
+            <span
+              className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                useNewSorting ? 'translate-x-5' : 'translate-x-0'
+              }`}
+            />
+          </button>
+        </div>
+
         <button
           type="submit"
           disabled={loading || allowed === false || allowed === null || !selectedFlipkartPdfFile}
