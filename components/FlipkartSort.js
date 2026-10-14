@@ -269,23 +269,31 @@ export default function FlipkartSort({
       let firstOriginIndex = {};
 
       if (useNewSorting) {
-        // --- NEW VERSION (Size-based tiering + Count-wise ascending origins) ---
-        const skuLabelCounts = {};
+        // --- NEW VERSION (Size-based tiering + Count-wise descending origins) ---
+        // Calculate total occurrences per origin across the PDF
+        // (Falls back to SKU if origin is missing/Unknown Origin)
+        const originTotalCounts = {};
         pageData.forEach((page) => {
-          const s = String(page.sku || '').trim().toLowerCase();
-          if (s) {
-            skuLabelCounts[s] = (skuLabelCounts[s] || 0) + 1;
+          const origin = (page.originName && page.originName.toLowerCase() !== 'unknown origin')
+            ? page.originName.trim()
+            : null;
+          const key = origin || (page.sku ? page.sku.trim() : null);
+          if (key) {
+            originTotalCounts[key] = (originTotalCounts[key] || 0) + 1;
           }
         });
 
-        // If sizeKey exists, assign tier based on Size and label count:
-        // Tier 0: Large size SKUs with total SKU label count > 2
-        // Tier 1: Small size SKUs with total SKU label count > 2
-        // Tier 2: All unknowns, total label count <= 2, and others
+        // If sizeKey exists, assign tier based on Size and total count:
+        // Tier 0: Large size with total count > 2
+        // Tier 1: Small size with total count > 2
+        // Tier 2: All unknowns, total count <= 2, and others (ready)
         pageData.forEach((page) => {
           if (sizeKey) {
-            const s = String(page.sku || '').trim().toLowerCase();
-            const count = skuLabelCounts[s] || 0;
+            const origin = (page.originName && page.originName.toLowerCase() !== 'unknown origin')
+              ? page.originName.trim()
+              : null;
+            const key = origin || (page.sku ? page.sku.trim() : null);
+            const count = key ? (originTotalCounts[key] || 0) : 0;
             const normSize = String(page.size || '').trim().toLowerCase();
             if (count > 2) {
               if (normSize === 'large') {
@@ -505,8 +513,18 @@ export default function FlipkartSort({
         }
 
         // 4. DRAW TEXT
+        let sizeTag = '';
+        if (useNewSorting && sizeKey && isFirstOfOrigin && totalCount > 2 && pageInfo.size) {
+          const normSize = String(pageInfo.size).trim().toLowerCase();
+          if (normSize === 'large') {
+            sizeTag = ' (L)';
+          } else if (normSize === 'small') {
+            sizeTag = ' (S)';
+          }
+        }
+
         if (pageInfo.originName) {
-          newPage.drawText(`O:- ${pageInfo.originName}`, { 
+          newPage.drawText(`O:- ${pageInfo.originName}${sizeTag}`, { 
             x: textX, 
             y: textY, 
             size: fontSize, 
