@@ -1,5 +1,7 @@
 import { useState } from 'react';
+import { useRouter } from 'next/router';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
+import { FaDatabase, FaExternalLinkAlt, FaCheckCircle, FaFileExcel, FaTimes, FaTrash } from 'react-icons/fa';
 
 export default function FlipkartSort({
   allowed,
@@ -14,10 +16,13 @@ export default function FlipkartSort({
   parseCSV,
   findHeaderKeyInsensitive,
   reconstructLinesFromTextItems,
+  masterSkus = [],
 }) {
+  const router = useRouter();
   const [selectedFlipkartPdfFile, setSelectedFlipkartPdfFile] = useState(null);
   const [selectedFlipkartCsvFile, setSelectedFlipkartCsvFile] = useState(null);
   const [hasCsvFile, setHasCsvFile] = useState(false);
+  const [showManualCsv, setShowManualCsv] = useState(false);
   const [useNewSorting, setUseNewSorting] = useState(true);
 
   const companies = ['Valmo', 'Xpress Bees', 'ShadowFax', 'Delhivery', 'Ecom Express', 'Flipkart'].sort();
@@ -110,7 +115,9 @@ export default function FlipkartSort({
 
     try {
       const pdfFile = event.target.pdf_flipkart.files[0];
-      const dataFile = event.target.csv_flipkart?.files?.[0] || null;
+      const dataFile = (showManualCsv || !masterSkus || masterSkus.length === 0)
+        ? (event.target.csv_flipkart?.files?.[0] || selectedFlipkartCsvFile || null)
+        : null;
       if (!pdfFile) throw new Error('Please select a PDF file');
 
       const isExcel = dataFile ? /\.(xlsx|xls)$/i.test(dataFile.name) : false;
@@ -142,16 +149,20 @@ export default function FlipkartSort({
             const csvText = await readFileAsText(dataFile);
             data = parseCSV(csvText);
           }
+        } else if (masterSkus && masterSkus.length > 0) {
+          // Use Company Master SKU file
+          data = masterSkus.map(s => ({ SKU: s.sku, Origin: s.origin, Size: s.size }));
         }
         return [lib, pdfBuf, data];
       })();
 
+      const hasDataSource = Boolean(dataFile || (masterSkus && masterSkus.length > 0));
       const skuKey = csvData.length ? findHeaderKeyInsensitive(csvData[0], 'SKU') : null;
       const originKey = csvData.length ? findHeaderKeyInsensitive(csvData[0], 'Origin') || findHeaderKeyInsensitive(csvData[0], 'origin') : null;
       const sizeKey = csvData.length ? findHeaderKeyInsensitive(csvData[0], 'Size') : null;
 
       const skuMap = new Map();
-      if (dataFile && skuKey && csvData.length) {
+      if (hasDataSource && skuKey && csvData.length) {
         for (const row of csvData) {
           const rawVal = row[skuKey];
           if (rawVal != null) {
@@ -190,8 +201,8 @@ export default function FlipkartSort({
         const qty = extractFlipkartQuantity(lines);
         let originName = null; 
         let size = null;
-        if (dataFile) {
-          originName = 'Unknown Origin'; // If file exists, default to Unknown
+        if (hasDataSource) {
+          originName = 'Unknown Origin'; // If file or master data exists, default to Unknown
           if (sku) {
             const cleanSku = String(sku).trim().toLowerCase();
             const originRow = skuMap.get(cleanSku);
@@ -621,19 +632,103 @@ export default function FlipkartSort({
           </div>
         </div>
         <div>
-          <label htmlFor="csv_flipkart" className="block text-sm font-medium text-gray-700 mb-2">
-            Upload CSV or Excel File (Optional)
-          </label>
-          <div className={`mt-1 flex justify-center px-6 pt-5 pb-6 border-2 border-dashed rounded-lg transition-colors ${
-            selectedFlipkartCsvFile ? 'border-green-400 bg-green-50' : 'border-gray-300 hover:border-green-400'
-          }`}>
-            <div className="space-y-1 text-center">
-              <svg className="mx-auto h-12 w-12 text-gray-400" stroke="currentColor" fill="none" viewBox="0 0 48 48">
-                <path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-              <div className="flex text-sm text-gray-600">
-                <label htmlFor="csv_flipkart" className="relative cursor-pointer bg-white rounded-md font-medium text-green-600 hover:text-green-500">
-                  <span>Upload a file</span>
+          {masterSkus && masterSkus.length > 0 ? (
+            <div className="rounded-xl border border-blue-200 bg-gradient-to-r from-blue-50/80 via-indigo-50/60 to-blue-50/80 p-3.5 sm:p-4 shadow-xs">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 bg-blue-600 text-white rounded-lg shadow-xs flex-shrink-0">
+                    <FaDatabase className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-xs font-bold uppercase tracking-wider text-blue-900">Company Master File</span>
+                      <span className="bg-emerald-100 text-emerald-800 text-[11px] font-bold px-2.5 py-0.5 rounded-full border border-emerald-300 inline-flex items-center gap-1">
+                        <FaCheckCircle className="w-3 h-3 text-emerald-600" />
+                        {masterSkus.length.toLocaleString()} SKUs Loaded
+                      </span>
+                    </div>
+                    <p className="text-xs text-gray-600 mt-1">
+                      {selectedFlipkartCsvFile
+                        ? "⚠️ Manual file uploaded below will override Master File for this run."
+                        : "✓ Automatically mapping Origin and Size from Company Master File for all labels."}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 self-start sm:self-auto bg-white/80 backdrop-blur-xs px-3 py-1.5 rounded-lg border border-blue-200 shadow-2xs">
+                  <span className="text-xs font-semibold text-gray-700">Add manual file:</span>
+                  <button
+                      type="button"
+                      role="switch"
+                      aria-checked={showManualCsv}
+                      onClick={() => {
+                        const next = !showManualCsv;
+                        setShowManualCsv(next);
+                        if (!next) {
+                          setSelectedFlipkartCsvFile(null);
+                          setHasCsvFile(false);
+                        }
+                      }}
+                      className={`relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                        showManualCsv ? 'bg-blue-600' : 'bg-gray-300'
+                      }`}
+                    >
+                      <span
+                        className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${
+                          showManualCsv ? 'translate-x-4' : 'translate-x-0'
+                        }`}
+                      />
+                    </button>
+                  </div>
+                </div>
+
+              {/* Expandable Manual CSV/Excel Upload Area */}
+              {showManualCsv && (
+                <div className="mt-3 pt-3 border-t border-blue-200/80">
+                  <div className="flex items-center justify-between mb-2">
+                    <label htmlFor="csv_flipkart" className="block text-xs font-bold text-gray-700 uppercase tracking-wider">
+                      Upload Override CSV or Excel File (Optional)
+                    </label>
+                    {selectedFlipkartCsvFile && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedFlipkartCsvFile(null);
+                          setHasCsvFile(false);
+                        }}
+                        className="text-xs text-red-600 hover:text-red-700 flex items-center gap-1 font-medium cursor-pointer"
+                      >
+                        <FaTimes className="w-3 h-3" />
+                        <span>Remove file</span>
+                      </button>
+                    )}
+                  </div>
+                  <div className={`flex justify-center px-6 pt-5 pb-6 border-2 border-dashed rounded-lg transition-colors bg-white ${
+                    selectedFlipkartCsvFile ? 'border-green-400 bg-green-50/50' : 'border-gray-300 hover:border-green-400'
+                  }`}>
+                    <div className="space-y-1 text-center w-full">
+                      {selectedFlipkartCsvFile ? (
+                        <div className="flex items-center justify-center gap-2 text-green-900">
+                          <FaFileExcel className="w-5 h-5 text-green-600" />
+                          <span className="text-sm font-semibold truncate">{selectedFlipkartCsvFile.name}</span>
+                          <span className="text-xs text-gray-500">({(selectedFlipkartCsvFile.size / 1024).toFixed(1)} KB)</span>
+                        </div>
+                      ) : (
+                        <>
+                          <svg className="mx-auto h-10 w-10 text-gray-400" stroke="currentColor" fill="none" viewBox="0 0 48 48">
+                            <path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+                          </svg>
+                          <div className="flex justify-center text-sm text-gray-600">
+                            <label htmlFor="csv_flipkart" className="relative cursor-pointer bg-white rounded-md font-medium text-green-600 hover:text-green-500">
+                              <span>Upload a file</span>
+                            </label>
+                            <p className="pl-1">or drag and drop</p>
+                          </div>
+                          <p className="text-xs text-gray-500">CSV or Excel (.xlsx, .xls)</p>
+                        </>
+                      )}
+                    </div>
+                  </div>
                   <input
                     type="file"
                     id="csv_flipkart"
@@ -646,28 +741,58 @@ export default function FlipkartSort({
                     }}
                     className="sr-only"
                   />
-                </label>
-                <p className="pl-1">or drag and drop</p>
-              </div>
-              <p className="text-xs text-gray-500">CSV or Excel (.xlsx, .xls)</p>
-              {selectedFlipkartCsvFile && (
-                <div className="mt-3 flex items-center gap-2 text-green-900 bg-green-50 p-2 rounded">
-                  <svg className="w-4 h-4 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
-                  </svg>
-                  <span className="font-medium">Selected:</span>
-                  <span className="truncate text-sm">{selectedFlipkartCsvFile.name}</span>
                 </div>
               )}
             </div>
-          </div>
-          <div className="mt-3 p-3 bg-blue-50 rounded-lg">
-            <p className="text-xs text-blue-700">
-              {hasCsvFile
-                ? "✓ CSV/Excel file will be used to add origin information"
-                : "ℹ Without CSV/Excel, sorting will be done by quantity, SKU, and company"}
-            </p>
-          </div>
+          ) : (
+            <div>
+              <label htmlFor="csv_flipkart" className="block text-sm font-medium text-gray-700 mb-2">
+                Upload CSV or Excel File (Optional)
+              </label>
+              <div className={`mt-1 flex justify-center px-6 pt-5 pb-6 border-2 border-dashed rounded-lg transition-colors ${
+                selectedFlipkartCsvFile ? 'border-green-400 bg-green-50' : 'border-gray-300 hover:border-green-400'
+              }`}>
+                <div className="space-y-1 text-center">
+                  <svg className="mx-auto h-12 w-12 text-gray-400" stroke="currentColor" fill="none" viewBox="0 0 48 48">
+                    <path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  <div className="flex text-sm text-gray-600">
+                    <label htmlFor="csv_flipkart" className="relative cursor-pointer bg-white rounded-md font-medium text-green-600 hover:text-green-500">
+                      <span>Upload a file</span>
+                      <input
+                        type="file"
+                        id="csv_flipkart"
+                        name="csv_flipkart"
+                        accept=".csv,.xlsx,.xls"
+                        onChange={(e) => {
+                          const file = e.target.files[0] || null;
+                          setSelectedFlipkartCsvFile(file);
+                          setHasCsvFile(e.target.files.length > 0);
+                        }}
+                        className="sr-only"
+                      />
+                    </label>
+                    <p className="pl-1">or drag and drop</p>
+                  </div>
+                  <p className="text-xs text-gray-500">CSV or Excel (.xlsx, .xls)</p>
+                  {selectedFlipkartCsvFile && (
+                    <div className="mt-3 flex items-center gap-2 text-green-900 bg-green-50 p-2 rounded">
+                      <svg className="w-4 h-4 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                      </svg>
+                      <span className="font-medium">Selected:</span>
+                      <span className="truncate text-sm">{selectedFlipkartCsvFile.name}</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+              <div className="mt-2 p-2.5 bg-blue-50 rounded-lg">
+                <p className="text-xs text-blue-800">
+                  ℹ Upload master file once to auto-map Origin & Size across all sorting runs.
+                </p>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Toggle between New Size+Count Sorting and Production Sorting */}

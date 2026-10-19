@@ -31,7 +31,8 @@ import {
   FaShoppingBag,
   FaTag,
   FaUndo,
-  FaFileInvoiceDollar
+  FaFileInvoiceDollar,
+  FaDatabase
 } from "react-icons/fa";
 import { SiAmazon, SiFlipkart } from "react-icons/si";
 
@@ -287,6 +288,7 @@ const Layout = ({ children }) => {
                       { href: '/extract-sku?tab=snapdeal', label: 'Snapdeal Sort', icon: FaTag },
                       { href: '/extract-sku?tab=amazon', label: 'Amazon Sort', icon: SiAmazon },
                       { href: '/extract-sku?tab=myntra', label: 'Myntra Sort', icon: FaBoxOpen },
+                      { href: '/extract-sku?tab=master-sku', label: 'Master SKU File', icon: FaDatabase },
                       { href: '/extract-sku?tab=excel', label: 'Generate Excel', icon: FaFileAlt, flag: 'isExcelFromPDF' },
                     ].filter(item => !item.flag || checkFeature(item.flag))}
                   />

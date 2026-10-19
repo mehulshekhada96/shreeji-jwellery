@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/router';
 import axios from 'axios';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
@@ -11,10 +11,12 @@ import AmazonSort from '../components/AmazonSort';
 import FlipkartSort from '../components/FlipkartSort';
 import MyntraSort from '../components/MyntraSort';
 import MeeshoDirectSort from '../components/MeeshoDirectSort';
+import MasterSkuManager from '../components/MasterSkuManager';
 import { useFeatureFlags } from '../utils/useFeatureFlags';
 import { parseSnapdealPDF } from '../utils/snapdealInventoryParser';
 import { SiAmazon, SiFlipkart } from 'react-icons/si';
-import { FaShoppingBag, FaTag, FaBoxOpen } from 'react-icons/fa';
+import { FaShoppingBag, FaTag, FaBoxOpen, FaDatabase, FaCheckCircle, FaFileExcel, FaTimes, FaExternalLinkAlt, FaTrash, FaSync } from 'react-icons/fa';
+import { toast } from 'react-toastify';
 
 
 export default function ExtractSKU() {
@@ -30,6 +32,37 @@ export default function ExtractSKU() {
   const [allowedDirectSort, setAllowedDirectSort] = useState(null);
   const [selectedPdfFile, setSelectedPdfFile] = useState(null); // For Meesho Sort
   const [selectedCsvFile, setSelectedCsvFile] = useState(null); // For Meesho Sort
+  const [showManualCsv, setShowManualCsv] = useState(false); // Toggle to show manual CSV upload
+  
+  // Company Master SKUs state
+  const [masterSkus, setMasterSkus] = useState([]);
+  const [masterSkusLoading, setMasterSkusLoading] = useState(false);
+  const hasFetchedMasterSkus = useRef(false);
+
+  const fetchMasterSkus = useCallback(async () => {
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) return;
+      setMasterSkusLoading(true);
+      const res = await axios.get('/api/master-sku?all=true', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.data?.success && Array.isArray(res.data.skus)) {
+        setMasterSkus(res.data.skus);
+      }
+    } catch (err) {
+      console.error('Error fetching master SKUs:', err);
+    } finally {
+      setMasterSkusLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!hasFetchedMasterSkus.current) {
+      hasFetchedMasterSkus.current = true;
+      fetchMasterSkus();
+    }
+  }, [fetchMasterSkus]);
   
   // SKU Inventory Management states
   const [inventoryData, setInventoryData] = useState(null);
@@ -79,7 +112,7 @@ export default function ExtractSKU() {
     if (router.isReady && router.query.tab) {
       const tab = router.query.tab;
       setSelectedTab(tab);
-      if (['sort', 'meesho-direct', 'amazon', 'flipkart', 'snapdeal', 'myntra', 'excel'].includes(tab)) {
+      if (['sort', 'meesho-direct', 'amazon', 'flipkart', 'snapdeal', 'myntra', 'excel', 'master-sku'].includes(tab)) {
         setMainTab('sku_management');
       } else if (['inventory', 'cancelled-orders', 'returns', 'customer-returns'].includes(tab)) {
         setMainTab('meesho_reconciliation');
@@ -687,24 +720,34 @@ export default function ExtractSKU() {
     setStatus('Preparing files...');
     try {
       const pdfFile = event.target.pdf.files[0];
-      const dataFile = event.target.csv.files[0];
-      if (!pdfFile || !dataFile) throw new Error('Please select both PDF and CSV/Excel files');
+      const dataFile = (showManualCsv || !masterSkus || masterSkus.length === 0)
+        ? (event.target.csv?.files?.[0] || selectedCsvFile || null)
+        : null;
+      if (!pdfFile) throw new Error('Please select a PDF file');
+      if (!dataFile && (!masterSkus || masterSkus.length === 0)) {
+        throw new Error('Please select a CSV/Excel file or upload a Master SKU file first');
+      }
 
-      const isExcel = /\.(xlsx|xls)$/i.test(dataFile.name);
+      const isExcel = dataFile ? /\.(xlsx|xls)$/i.test(dataFile.name) : false;
       const [pdfjsLib, pdfArrayBuffer, csvData] = await (async () => {
         const [lib, pdfBuf] = await Promise.all([
           loadPdfJs(),
           readFileAsArrayBuffer(pdfFile)
         ]);
-        if (isExcel) {
-          const dataBuf = await readFileAsArrayBuffer(dataFile);
-          setStatus('Parsing Excel...');
-          const data = parseExcel(dataBuf);
-          return [lib, pdfBuf, data];
+        if (dataFile) {
+          if (isExcel) {
+            const dataBuf = await readFileAsArrayBuffer(dataFile);
+            setStatus('Parsing Excel...');
+            const data = parseExcel(dataBuf);
+            return [lib, pdfBuf, data];
+          }
+          setStatus('Parsing CSV...');
+          const csvText = await readFileAsText(dataFile);
+          return [lib, pdfBuf, parseCSV(csvText)];
         }
-        setStatus('Parsing CSV...');
-        const csvText = await readFileAsText(dataFile);
-        return [lib, pdfBuf, parseCSV(csvText)];
+        // Fallback to Company Master SKUs
+        const data = (masterSkus || []).map(s => ({ SKU: s.sku, Origin: s.origin, Size: s.size }));
+        return [lib, pdfBuf, data];
       })();
       const skuKey = csvData.length ? findHeaderKeyInsensitive(csvData[0], 'SKU') : null;
       const originKey = csvData.length ? findHeaderKeyInsensitive(csvData[0], 'Origin') || findHeaderKeyInsensitive(csvData[0], 'origin') : null;
@@ -733,8 +776,9 @@ export default function ExtractSKU() {
         const sku = extractSKU(lines);
         const qty = extractQuantity(lines);
         let originName = 'Unknown Origin';
-        if (skuKey) {
-          const originRow = csvData.find(row => String(row[skuKey]).trim() === String(sku).trim());
+        if (skuKey && sku) {
+          const cleanTarget = String(sku).trim().toLowerCase();
+          const originRow = csvData.find(row => String(row[skuKey] || '').trim().toLowerCase() === cleanTarget);
           if (originRow && originKey) originName = originRow[originKey] || 'Unknown Origin';
         }
         const company = extractCompany(lines) || 'Zzzzz';
@@ -2013,6 +2057,24 @@ export default function ExtractSKU() {
               </div>
             </button>
             <button
+              onClick={() => setSelectedTab('master-sku')}
+              className={`py-3 px-1 border-b-2 font-medium text-sm transition-all duration-200 ${
+                selectedTab === 'master-sku'
+                  ? 'border-indigo-400 text-indigo-400'
+                  : 'border-transparent text-white hover:text-gray-100 hover:border-gray-500'
+              }`}
+            >
+              <div className="flex items-center space-x-2">
+                <FaDatabase className={`w-4 h-4 ${selectedTab === 'master-sku' ? 'text-indigo-400' : 'text-gray-400'}`} title="Master SKU File" />
+                <span>Master SKU File</span>
+                {masterSkus.length > 0 && (
+                  <span className="px-1.5 py-0.5 text-[10px] font-bold rounded-full bg-indigo-500/30 text-indigo-200 border border-indigo-400/30">
+                    {masterSkus.length}
+                  </span>
+                )}
+              </div>
+            </button>
+            <button
               onClick={() => setSelectedTab('excel')}
               disabled={!flagsLoading && (!featureFlags || featureFlags.isExcelFromPDF !== true)}
               className={`py-3 px-1 border-b-2 font-medium text-sm transition-all duration-200 ${
@@ -2265,65 +2327,179 @@ export default function ExtractSKU() {
                 />
               </div>
               <div>
-                <label htmlFor="csv" className="block text-sm font-medium text-gray-700 mb-2">
-                  Upload CSV or Excel File
-                </label>
-                <div className={`mt-1 flex justify-center px-6 pt-5 pb-6 border-2 border-dashed rounded-lg transition-colors ${
-                  selectedCsvFile ? 'border-green-400 bg-green-50' : 'border-gray-300 hover:border-blue-400'
-                }`}>
-                  <div className="space-y-1 text-center w-full">
-                    {selectedCsvFile ? (
-                      <>
-                        <svg className="mx-auto h-12 w-12 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                        </svg>
-                        <div className="mt-3 px-4 py-2 bg-green-100 rounded-lg border border-green-300">
-                          <div className="flex items-center justify-start gap-2">
-                            <svg className="w-5 h-5 text-green-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
-                            </svg>
-                            <div className="flex-1 min-w-0">
-                              <div className="text-sm font-semibold text-green-800 truncate" title={selectedCsvFile.name}>
-                                {selectedCsvFile.name}
+                {masterSkus && masterSkus.length > 0 ? (
+                  <div className="rounded-xl border border-blue-200 bg-gradient-to-r from-blue-50/80 via-indigo-50/60 to-blue-50/80 p-3.5 sm:p-4 shadow-xs">
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                      <div className="flex items-center gap-3">
+                        <div className="p-2.5 bg-blue-600 text-white rounded-lg shadow-xs flex-shrink-0">
+                          <FaDatabase className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-xs font-bold uppercase tracking-wider text-blue-900">Company Master File</span>
+                            <span className="bg-emerald-100 text-emerald-800 text-[11px] font-bold px-2.5 py-0.5 rounded-full border border-emerald-300 inline-flex items-center gap-1">
+                              <FaCheckCircle className="w-3 h-3 text-emerald-600" />
+                              {masterSkus.length.toLocaleString()} SKUs Loaded
+                            </span>
+                          </div>
+                          <p className="text-xs text-gray-600 mt-1">
+                            {selectedCsvFile
+                              ? "⚠️ Manual file uploaded below will override Master File for this run."
+                              : "✓ Auto-mapping Origin and Size from Master File for all labels."}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 self-start sm:self-auto bg-white/80 backdrop-blur-xs px-3 py-1.5 rounded-lg border border-blue-200 shadow-2xs">
+                        <span className="text-xs font-semibold text-gray-700">Add manual file:</span>
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={showManualCsv}
+                          onClick={() => {
+                            const next = !showManualCsv;
+                            setShowManualCsv(next);
+                            if (!next) setSelectedCsvFile(null);
+                          }}
+                          className={`relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                            showManualCsv ? 'bg-blue-600' : 'bg-gray-300'
+                          }`}
+                        >
+                          <span
+                            className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${
+                              showManualCsv ? 'translate-x-4' : 'translate-x-0'
+                            }`}
+                          />
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Expandable Manual CSV/Excel Upload Area */}
+                    {showManualCsv && (
+                      <div className="mt-3 pt-3 border-t border-blue-200/80">
+                        <div className="flex items-center justify-between mb-2">
+                          <label htmlFor="csv" className="block text-xs font-bold text-gray-700 uppercase tracking-wider">
+                            Upload Override CSV or Excel File (Optional)
+                          </label>
+                          {selectedCsvFile && (
+                            <button
+                              type="button"
+                              onClick={() => setSelectedCsvFile(null)}
+                              className="text-xs text-red-600 hover:text-red-700 flex items-center gap-1 font-medium cursor-pointer"
+                            >
+                              <FaTimes className="w-3 h-3" />
+                              <span>Remove file</span>
+                            </button>
+                          )}
+                        </div>
+                        <div className={`flex justify-center px-6 pt-5 pb-6 border-2 border-dashed rounded-lg transition-colors bg-white ${
+                          selectedCsvFile ? 'border-green-400 bg-green-50/50' : 'border-gray-300 hover:border-blue-400'
+                        }`}>
+                          <div className="space-y-1 text-center w-full">
+                            {selectedCsvFile ? (
+                              <div className="flex items-center justify-center gap-2 text-green-900">
+                                <FaFileExcel className="w-5 h-5 text-green-600" />
+                                <span className="text-sm font-semibold truncate">{selectedCsvFile.name}</span>
+                                <span className="text-xs text-gray-500">({(selectedCsvFile.size / 1024).toFixed(1)} KB)</span>
                               </div>
-                              <div className="text-xs text-green-700 font-medium mt-0.5">
-                                File size: {(selectedCsvFile.size / 1024).toFixed(2)} KB
-                              </div>
-                            </div>
+                            ) : (
+                              <>
+                                <svg className="mx-auto h-10 w-10 text-gray-400" stroke="currentColor" fill="none" viewBox="0 0 48 48">
+                                  <path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+                                </svg>
+                                <div className="flex justify-center text-sm text-gray-600">
+                                  <label htmlFor="csv" className="relative cursor-pointer bg-white rounded-md font-medium text-blue-600 hover:text-blue-500">
+                                    <span>Upload a file</span>
+                                  </label>
+                                  <p className="pl-1">or drag and drop</p>
+                                </div>
+                                <p className="text-xs text-gray-500">CSV or Excel (.xlsx, .xls)</p>
+                              </>
+                            )}
                           </div>
                         </div>
-                        <label htmlFor="csv" className="mt-2 block text-xs text-gray-500 cursor-pointer hover:text-blue-600">
-                          Click to change file
-                        </label>
-                      </>
-                    ) : (
-                      <>
-                        <svg className="mx-auto h-12 w-12 text-gray-400" stroke="currentColor" fill="none" viewBox="0 0 48 48">
-                          <path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
-                        </svg>
-                        <div className="flex text-sm text-gray-600">
-                          <label htmlFor="csv" className="relative cursor-pointer bg-white rounded-md font-medium text-blue-600 hover:text-blue-500">
-                            <span>Upload a file</span>
-                          </label>
-                          <p className="pl-1">or drag and drop</p>
-                        </div>
-                        <p className="text-xs text-gray-500">CSV or Excel (.xlsx, .xls)</p>
-                      </>
+                        <input
+                          type="file"
+                          id="csv"
+                          name="csv"
+                          accept=".csv,.xlsx,.xls"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            setSelectedCsvFile(file || null);
+                          }}
+                          className="sr-only"
+                        />
+                      </div>
                     )}
                   </div>
-                </div>
-                <input
-                  type="file"
-                  id="csv"
-                  name="csv"
-                  accept=".csv,.xlsx,.xls"
-                  required
-                  onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    setSelectedCsvFile(file || null);
-                  }}
-                  className="sr-only"
-                />
+                ) : (
+                  <div>
+                    <label htmlFor="csv" className="block text-sm font-medium text-gray-700 mb-2">
+                      Upload CSV or Excel File
+                    </label>
+                    <div className={`mt-1 flex justify-center px-6 pt-5 pb-6 border-2 border-dashed rounded-lg transition-colors ${
+                      selectedCsvFile ? 'border-green-400 bg-green-50' : 'border-gray-300 hover:border-blue-400'
+                    }`}>
+                      <div className="space-y-1 text-center w-full">
+                        {selectedCsvFile ? (
+                          <>
+                            <svg className="mx-auto h-12 w-12 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                            <div className="mt-3 px-4 py-2 bg-green-100 rounded-lg border border-green-300">
+                              <div className="flex items-center justify-start gap-2">
+                                <svg className="w-5 h-5 text-green-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                                </svg>
+                                <div className="flex-1 min-w-0">
+                                  <div className="text-sm font-semibold text-green-800 truncate" title={selectedCsvFile.name}>
+                                    {selectedCsvFile.name}
+                                  </div>
+                                  <div className="text-xs text-green-700 font-medium mt-0.5">
+                                    File size: {(selectedCsvFile.size / 1024).toFixed(2)} KB
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                            <label htmlFor="csv" className="mt-2 block text-xs text-gray-500 cursor-pointer hover:text-blue-600">
+                              Click to change file
+                            </label>
+                          </>
+                        ) : (
+                          <>
+                            <svg className="mx-auto h-12 w-12 text-gray-400" stroke="currentColor" fill="none" viewBox="0 0 48 48">
+                              <path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+                            </svg>
+                            <div className="flex text-sm text-gray-600">
+                              <label htmlFor="csv" className="relative cursor-pointer bg-white rounded-md font-medium text-blue-600 hover:text-blue-500">
+                                <span>Upload a file</span>
+                              </label>
+                              <p className="pl-1">or drag and drop</p>
+                            </div>
+                            <p className="text-xs text-gray-500">CSV or Excel (.xlsx, .xls)</p>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                    <input
+                      type="file"
+                      id="csv"
+                      name="csv"
+                      accept=".csv,.xlsx,.xls"
+                      required={!masterSkus || masterSkus.length === 0}
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        setSelectedCsvFile(file || null);
+                      }}
+                      className="sr-only"
+                    />
+                    <div className="mt-2 p-2.5 bg-blue-50 rounded-lg">
+                      <p className="text-xs text-blue-800">
+                        ℹ Upload a CSV/Excel file or set up your Master SKU File to map origins.
+                      </p>
+                    </div>
+                  </div>
+                )}
               </div>
               {/* Selected Files Summary */}
               {(selectedPdfFile || selectedCsvFile) && (
@@ -2339,14 +2515,22 @@ export default function ExtractSKU() {
                         <span className="truncate">{selectedPdfFile.name}</span>
                       </div>
                     )}
-                    {selectedCsvFile && (
+                    {selectedCsvFile ? (
                       <div className="flex items-center gap-2 text-blue-900">
                         <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
                         </svg>
-                        <span className="font-medium">CSV:</span>
+                        <span className="font-medium">CSV/Excel:</span>
                         <span className="truncate">{selectedCsvFile.name}</span>
                       </div>
+                    ) : (
+                      masterSkus && masterSkus.length > 0 && (
+                        <div className="flex items-center gap-2 text-blue-900">
+                          <FaDatabase className="w-3.5 h-3.5 text-blue-600" />
+                          <span className="font-medium">Mapping:</span>
+                          <span className="text-emerald-700 font-semibold">Using Company Master File ({masterSkus.length.toLocaleString()} SKUs)</span>
+                        </div>
+                      )
                     )}
                   </div>
                 </div>
@@ -2354,7 +2538,7 @@ export default function ExtractSKU() {
 
               <button
                 type="submit"
-                disabled={loading || allowed === false || allowed === null || !selectedPdfFile || !selectedCsvFile}
+                disabled={loading || allowed === false || allowed === null || !selectedPdfFile || (!selectedCsvFile && (!masterSkus || masterSkus.length === 0))}
                 className="w-full flex justify-center items-center py-3 px-4 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
               >
                 {loading ? (
@@ -2388,6 +2572,7 @@ export default function ExtractSKU() {
             parseExcel={parseExcel}
             findHeaderKeyInsensitive={findHeaderKeyInsensitive}
             readFileAsText={readFileAsText}
+            masterSkus={masterSkus}
           />
         )}
 
@@ -2406,6 +2591,7 @@ export default function ExtractSKU() {
             parseExcel={parseExcel}
             findHeaderKeyInsensitive={findHeaderKeyInsensitive}
             reconstructLinesFromTextItems={reconstructLinesFromTextItems}
+            masterSkus={masterSkus}
           />
         )}
 
@@ -2423,6 +2609,7 @@ export default function ExtractSKU() {
             parseCSV={parseCSV}
             findHeaderKeyInsensitive={findHeaderKeyInsensitive}
             reconstructLinesFromTextItems={reconstructLinesFromTextItems}
+            masterSkus={masterSkus}
           />
         )}
 
@@ -2440,6 +2627,7 @@ export default function ExtractSKU() {
             parseCSV={parseCSV}
             findHeaderKeyInsensitive={findHeaderKeyInsensitive}
             reconstructLinesFromTextItems={reconstructLinesFromTextItems}
+            masterSkus={masterSkus}
           />
         )}
 
@@ -2458,7 +2646,14 @@ export default function ExtractSKU() {
             parseExcel={parseExcel}
             findHeaderKeyInsensitive={findHeaderKeyInsensitive}
             reconstructLinesFromTextItems={reconstructLinesFromTextItems}
+            masterSkus={masterSkus}
           />
+        )}
+
+        {selectedTab === 'master-sku' && (
+          <div className="p-6">
+            <MasterSkuManager onMasterSkusUpdated={fetchMasterSkus} />
+          </div>
         )}
 
         {selectedTab === 'excel' && (
