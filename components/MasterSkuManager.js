@@ -71,6 +71,7 @@ export default function MasterSkuManager({ onMasterSkusUpdated }) {
   const [uploadFile, setUploadFile] = useState(null);
   const [parsedData, setParsedData] = useState(null);
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(null);
   const [showUploadConfirm, setShowUploadConfirm] = useState(false);
   const fileInputRef = useRef(null);
 
@@ -397,26 +398,73 @@ export default function MasterSkuManager({ onMasterSkusUpdated }) {
     }
   };
 
-  // Perform upload to server
+  // Perform chunked upload to server to prevent timeouts on large files
   const confirmUpload = async () => {
     if (!parsedData || !parsedData.items) return;
 
     setUploading(true);
+    setUploadProgress({
+      currentChunk: 0,
+      totalChunks: 1,
+      processedItems: 0,
+      totalItems: parsedData.items.length,
+      percent: 0
+    });
+
     try {
       const token = localStorage.getItem('token');
-      const res = await axios.post(
-        '/api/master-sku/upload',
-        {
-          items: parsedData.items,
-          fileName: parsedData.fileName
-        },
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
+      const CHUNK_SIZE = 5000;
+      const items = parsedData.items;
+      const totalItems = items.length;
+      const totalChunks = Math.ceil(totalItems / CHUNK_SIZE);
+      let previousCount = 0;
+      let finalResData = null;
 
-      if (res.data.success) {
-        toast.success(res.data.message || 'Master file uploaded successfully!');
-        if (res.data.history) setHistory(res.data.history);
-        if (res.data.uploadHistory) setUploadHistory(res.data.uploadHistory);
+      for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
+        const chunkItems = items.slice(chunkIndex * CHUNK_SIZE, (chunkIndex + 1) * CHUNK_SIZE);
+        const percent = Math.round((chunkIndex / totalChunks) * 100);
+
+        setUploadProgress({
+          currentChunk: chunkIndex + 1,
+          totalChunks,
+          processedItems: Math.min(chunkIndex * CHUNK_SIZE + chunkItems.length, totalItems),
+          totalItems,
+          percent
+        });
+
+        const res = await axios.post(
+          '/api/master-sku/upload',
+          {
+            chunkIndex,
+            totalChunks,
+            previousCount,
+            fileName: parsedData.fileName,
+            items: chunkItems
+          },
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+
+        if (res.data.previousCount !== undefined) {
+          previousCount = res.data.previousCount;
+        }
+
+        if (chunkIndex === totalChunks - 1) {
+          finalResData = res.data;
+        }
+      }
+
+      setUploadProgress({
+        currentChunk: totalChunks,
+        totalChunks,
+        processedItems: totalItems,
+        totalItems,
+        percent: 100
+      });
+
+      if (finalResData && finalResData.success) {
+        toast.success(finalResData.message || 'Master file uploaded successfully!');
+        if (finalResData.history) setHistory(finalResData.history);
+        if (finalResData.uploadHistory) setUploadHistory(finalResData.uploadHistory);
         setShowUploadConfirm(false);
         setUploadFile(null);
         setParsedData(null);
@@ -426,9 +474,10 @@ export default function MasterSkuManager({ onMasterSkusUpdated }) {
       }
     } catch (err) {
       console.error('Error saving master file:', err);
-      toast.error(err.response?.data?.message || 'Failed to save master file');
+      toast.error(err.response?.data?.message || err.message || 'Failed to save master file');
     } finally {
       setUploading(false);
+      setUploadProgress(null);
     }
   };
 
@@ -1095,6 +1144,22 @@ export default function MasterSkuManager({ onMasterSkusUpdated }) {
               </div>
             </div>
 
+            {/* Progress bar during sync */}
+            {uploadProgress && (
+              <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg space-y-2">
+                <div className="flex justify-between text-xs text-blue-900 font-medium">
+                  <span>Uploading batch {uploadProgress.currentChunk} of {uploadProgress.totalChunks}...</span>
+                  <span>{uploadProgress.processedItems.toLocaleString()} / {uploadProgress.totalItems.toLocaleString()} SKUs ({uploadProgress.percent}%)</span>
+                </div>
+                <div className="w-full bg-blue-200 rounded-full h-2 overflow-hidden">
+                  <div
+                    className="bg-blue-600 h-2 rounded-full transition-all duration-300"
+                    style={{ width: `${uploadProgress.percent}%` }}
+                  />
+                </div>
+              </div>
+            )}
+
             <div className="flex items-center justify-end gap-3 pt-2">
               <button
                 type="button"
@@ -1118,7 +1183,9 @@ export default function MasterSkuManager({ onMasterSkusUpdated }) {
                 {uploading ? (
                   <>
                     <FaSync className="animate-spin w-4 h-4" />
-                    <span>Uploading...</span>
+                    <span>
+                      {uploadProgress ? `Syncing (${uploadProgress.percent}%)` : 'Processing...'}
+                    </span>
                   </>
                 ) : (
                   <>
