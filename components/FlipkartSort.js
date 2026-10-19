@@ -270,30 +270,33 @@ export default function FlipkartSort({
 
       if (useNewSorting) {
         // --- NEW VERSION (Size-based tiering + Count-wise descending origins) ---
-        // Calculate total occurrences per origin across the PDF
+        // Calculate total occurrences per origin within each priority group (Single-item vs Multi-item)
         // (Falls back to SKU if origin is missing/Unknown Origin)
         const originTotalCounts = {};
         pageData.forEach((page) => {
+          const priority = (page.qty > 1) ? 1 : 0;
           const origin = (page.originName && page.originName.toLowerCase() !== 'unknown origin')
             ? page.originName.trim()
             : null;
           const key = origin || (page.sku ? page.sku.trim() : null);
           if (key) {
-            originTotalCounts[key] = (originTotalCounts[key] || 0) + 1;
+            const groupCountKey = `${priority}_${key}`;
+            originTotalCounts[groupCountKey] = (originTotalCounts[groupCountKey] || 0) + 1;
           }
         });
 
-        // If sizeKey exists, assign tier based on Size and total count:
+        // If sizeKey exists, assign tier based on Size and total count within priority group:
         // Tier 0: Large size with total count > 2
         // Tier 1: Small size with total count > 2
         // Tier 2: All unknowns, total count <= 2, and others (ready)
         pageData.forEach((page) => {
           if (sizeKey) {
+            const priority = (page.qty > 1) ? 1 : 0;
             const origin = (page.originName && page.originName.toLowerCase() !== 'unknown origin')
               ? page.originName.trim()
               : null;
             const key = origin || (page.sku ? page.sku.trim() : null);
-            const count = key ? (originTotalCounts[key] || 0) : 0;
+            const count = key ? (originTotalCounts[`${priority}_${key}`] || 0) : 0;
             const normSize = String(page.size || '').trim().toLowerCase();
             if (count > 2) {
               if (normSize === 'large') {
@@ -323,16 +326,17 @@ export default function FlipkartSort({
         });
 
         // Multi-Product Sorting:
-        // If Size column present: Tier 0 (Large > 2) -> Tier 1 (Small > 2) -> Tier 2 (<= 2 and Unknowns)
-        // Within each group: Single-item (Qty=1) -> Multi-item (Qty>1) -> Origin (count-wise descending for A-Y, Z origins after, Unknown at end) -> SKU -> Company
+        // 1. Primary: Single-item (Qty=1, Priority 0) -> Multi-item (Qty>1, Priority 1) AT THE VERY END (like classic logic)
+        // 2. Secondary: If Size column present: Tier 0 (Large > 2) -> Tier 1 (Small > 2) -> Tier 2 (<= 2 and Unknowns)
+        // 3. Tertiary: Origin (count-wise descending for A-Y, Z origins after, Unknown at end) -> SKU -> Company
         pageData.sort((a, b) => {
-          if (sizeKey && a.tier !== b.tier) {
-            return a.tier - b.tier;
-          }
-
           const priorityA = (a.qty > 1) ? 1 : 0;
           const priorityB = (b.qty > 1) ? 1 : 0;
           if (priorityA !== priorityB) return priorityA - priorityB;
+
+          if (sizeKey && a.tier !== b.tier) {
+            return a.tier - b.tier;
+          }
 
           // Secondary Sort: Origin Name (Count-wise descending for A-Y, Z origins after, Unknown Origin at end)
           const originA = (a.originName || '').trim(); 
