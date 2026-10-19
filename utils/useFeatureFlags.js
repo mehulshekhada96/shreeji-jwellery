@@ -304,7 +304,7 @@ export const useFeatureFlags = () => {
    * @param {string} flagName - Name of the feature flag (e.g., 'isExtractSKU')
    * @returns {boolean} - True if feature is enabled, false otherwise
    */
-  const checkFeature = (flagName) => {
+  const checkFeature = useCallback((flagName) => {
     try {
       if (!featureFlags || !flagName) return false;
       return Boolean(featureFlags[flagName]);
@@ -312,7 +312,7 @@ export const useFeatureFlags = () => {
       console.error('Error checking feature flag:', error);
       return false;
     }
-  };
+  }, [featureFlags]);
 
   /**
    * Force refresh flags from API (bypasses cache)
