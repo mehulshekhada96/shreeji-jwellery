@@ -28,7 +28,7 @@ export default function SnapdealSort({
     const SKUIndex = lines.findIndex(line => line.includes('SUBORDER CODE'));
     if (SKUIndex > -1) {
       const withPipeline = lines[SKUIndex + 1]?.trim()?.split('  ')?.[0]?.trim();
-      name = withPipeline?.split('|')?.[1]?.trim();
+      name = withPipeline?.includes('|') ? withPipeline?.split('|')?.[1]?.trim() : withPipeline?.trim();
     } else {
       const PRODUCTNameIndex = lines.findIndex(line => line.includes('PRODUCT NAME'));
       if (PRODUCTNameIndex > -1) {
@@ -125,10 +125,30 @@ export default function SnapdealSort({
       let originKey = null;
 
       if (csvData.length) {
-        skuKey = findHeaderKeyInsensitive(csvData[0], 'SKU');
+        skuKey =
+          (findHeaderKeyInsensitive && findHeaderKeyInsensitive(csvData[0], 'SKU')) ||
+          Object.keys(csvData[0]).find(k => k.trim().toLowerCase() === 'sku') ||
+          'SKU';
         originKey =
-          findHeaderKeyInsensitive(csvData[0], 'Origin') ||
-          findHeaderKeyInsensitive(csvData[0], 'origin');
+          (findHeaderKeyInsensitive &&
+            (findHeaderKeyInsensitive(csvData[0], 'Origin') ||
+              findHeaderKeyInsensitive(csvData[0], 'origin'))) ||
+          Object.keys(csvData[0]).find(k => k.trim().toLowerCase() === 'origin') ||
+          'Origin';
+      }
+
+      // Fast O(1) lookup Map for origin mapping (case-insensitive & trimmed)
+      const originMap = new Map();
+      if (csvData.length && skuKey && originKey) {
+        for (const row of csvData) {
+          const rawSku = String(row[skuKey] || '').trim();
+          if (rawSku) {
+            const lowerK = rawSku.toLowerCase();
+            if (!originMap.has(lowerK)) {
+              originMap.set(lowerK, String(row[originKey] || '').trim());
+            }
+          }
+        }
       }
 
       setStatus('Reading PDF...');
@@ -155,9 +175,9 @@ export default function SnapdealSort({
         }
 
         let originName = 'Unknown Origin';
-        if (csvData.length && skuKey && originKey) {
-          const row = csvData.find(r => String(r[skuKey]).trim() === String(sku).trim());
-          if (row) originName = String(row[originKey] || '').trim() || originName;
+        const cleanSku = String(sku || '').trim().toLowerCase();
+        if (originMap.has(cleanSku)) {
+          originName = originMap.get(cleanSku) || originName;
         }
 
         pageData.push({ pageNumber: i, sku, qty, originName, company });
@@ -165,7 +185,7 @@ export default function SnapdealSort({
 
       const UNKNOWN_ORIGIN = 'Unknown Origin';
       const isUnknown = (o) => (o || '') === UNKNOWN_ORIGIN;
-      const hasValidCsv = csvFile && csvData.length > 0;
+      const hasValidCsv = Boolean(csvData && csvData.length > 0);
 
       pageData.sort((a, b) => {
         if (hasValidCsv) {
@@ -510,7 +530,7 @@ export default function SnapdealSort({
         </div>
         <button
           type="submit"
-          disabled={loading || allowed === false || allowed === null}
+          disabled={loading || allowed === false || allowed === null || !selectedSnapdealPdfFile}
           className="w-full flex justify-center items-center py-3 px-4 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
         >
           {loading ? (
