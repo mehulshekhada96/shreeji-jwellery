@@ -12,10 +12,11 @@ import FlipkartSort from '../components/FlipkartSort';
 import MyntraSort from '../components/MyntraSort';
 import MeeshoDirectSort from '../components/MeeshoDirectSort';
 import MasterSkuManager from '../components/MasterSkuManager';
+import MasterRateManager from '../components/MasterRateManager';
 import { useFeatureFlags } from '../utils/useFeatureFlags';
 import { parseSnapdealPDF } from '../utils/snapdealInventoryParser';
 import { SiAmazon, SiFlipkart } from 'react-icons/si';
-import { FaShoppingBag, FaTag, FaBoxOpen, FaDatabase, FaCheckCircle, FaFileExcel, FaTimes, FaExternalLinkAlt, FaTrash, FaSync } from 'react-icons/fa';
+import { FaShoppingBag, FaTag, FaBoxOpen, FaDatabase, FaCheckCircle, FaFileExcel, FaTimes, FaExternalLinkAlt, FaTrash, FaSync, FaMoneyBillWave } from 'react-icons/fa';
 import { toast } from 'react-toastify';
 
 
@@ -112,7 +113,7 @@ export default function ExtractSKU() {
     if (router.isReady && router.query.tab) {
       const tab = router.query.tab;
       setSelectedTab(tab);
-      if (['sort', 'meesho-direct', 'amazon', 'flipkart', 'snapdeal', 'myntra', 'excel', 'master-sku'].includes(tab)) {
+      if (['sort', 'meesho-direct', 'amazon', 'flipkart', 'snapdeal', 'myntra', 'excel', 'master-sku', 'master-rate'].includes(tab)) {
         setMainTab('sku_management');
       } else if (['inventory', 'cancelled-orders', 'returns', 'customer-returns'].includes(tab)) {
         setMainTab('meesho_reconciliation');
@@ -2075,6 +2076,19 @@ export default function ExtractSKU() {
               </div>
             </button>
             <button
+              onClick={() => setSelectedTab('master-rate')}
+              className={`py-3 px-1 border-b-2 font-medium text-sm transition-all duration-200 ${
+                selectedTab === 'master-rate'
+                  ? 'border-emerald-400 text-emerald-400'
+                  : 'border-transparent text-white hover:text-gray-100 hover:border-gray-500'
+              }`}
+            >
+              <div className="flex items-center space-x-2">
+                <FaMoneyBillWave className={`w-4 h-4 ${selectedTab === 'master-rate' ? 'text-emerald-400' : 'text-gray-400'}`} title="Master Rate File" />
+                <span>Master Rate File</span>
+              </div>
+            </button>
+            <button
               onClick={() => setSelectedTab('excel')}
               disabled={!flagsLoading && (!featureFlags || featureFlags.isExcelFromPDF !== true)}
               className={`py-3 px-1 border-b-2 font-medium text-sm transition-all duration-200 ${
@@ -2652,7 +2666,30 @@ export default function ExtractSKU() {
 
         {selectedTab === 'master-sku' && (
           <div className="p-6">
-            <MasterSkuManager onMasterSkusUpdated={fetchMasterSkus} />
+            <MasterSkuManager
+              onMasterSkusUpdated={fetchMasterSkus}
+              onNavigateToRate={(targetOrigin, options = {}) => {
+                setSelectedTab('master-rate');
+                setMainTab('sku_management');
+                const params = new URLSearchParams();
+                params.set('tab', 'master-rate');
+                params.set('search', targetOrigin);
+                if (options.autoAdd) {
+                  params.set('addOrigin', targetOrigin);
+                  if (options.size) params.set('size', options.size);
+                }
+                router.push(`/extract-sku?${params.toString()}`, undefined, { shallow: true });
+              }}
+            />
+          </div>
+        )}
+
+        {selectedTab === 'master-rate' && (
+          <div className="p-6">
+            <MasterRateManager
+              onMasterRatesUpdated={fetchMasterSkus}
+              initialSearch={router.query?.search ? String(router.query.search) : ''}
+            />
           </div>
         )}
 

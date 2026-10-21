@@ -3,6 +3,7 @@ import axios from 'axios';
 import { toast } from 'react-toastify';
 import moment from 'moment';
 import * as XLSX from 'xlsx';
+import { useRouter } from 'next/router';
 import {
   FaDatabase,
   FaUpload,
@@ -27,10 +28,20 @@ import {
   FaSortUp,
   FaSortDown,
   FaDownload,
-  FaUndo
+  FaUndo,
+  FaImage,
+  FaBoxOpen,
+  FaMoneyBillWave,
+  FaExternalLinkAlt
 } from 'react-icons/fa';
 
-export default function MasterSkuManager({ onMasterSkusUpdated }) {
+export default function MasterSkuManager({ onMasterSkusUpdated, onNavigateToRate }) {
+  const router = useRouter();
+  const [selectedOriginDetails, setSelectedOriginDetails] = useState(null);
+  const [rateStatusFilter, setRateStatusFilter] = useState('all'); // 'all' | 'configured' | 'not_configured'
+  const [isQuickConfiguring, setIsQuickConfiguring] = useState(false);
+  const [quickRateData, setQuickRateData] = useState({ itemRate: '', boxRate: '', boxReturnRate: '', imageLink: '', size: '' });
+  const [savingQuickRate, setSavingQuickRate] = useState(false);
   const [items, setItems] = useState([]);
   const [totalCount, setTotalCount] = useState(0);
   const [page, setPage] = useState(1);
@@ -58,6 +69,9 @@ export default function MasterSkuManager({ onMasterSkusUpdated }) {
   const [deletingFileItem, setDeletingFileItem] = useState(null);
   const [deletingFile, setDeletingFile] = useState(false);
   const [deleteActiveSkusOption, setDeleteActiveSkusOption] = useState(false);
+
+  // Image Preview Modal
+  const [previewImage, setPreviewImage] = useState(null);
 
   // Delete Whole Current Active Master File state
   const [showDeleteCurrentFileModal, setShowDeleteCurrentFileModal] = useState(false);
@@ -88,7 +102,7 @@ export default function MasterSkuManager({ onMasterSkusUpdated }) {
   const [deleting, setDeleting] = useState(false);
 
   // Fetch SKUs with infinite scroll and dynamic sorting
-  const fetchSkus = useCallback(async (targetPage = 1, searchQuery = search, sortField = sortBy, sortDir = sortOrder, reset = false) => {
+  const fetchSkus = useCallback(async (targetPage = 1, searchQuery = '', sortField = sortBy, sortDir = sortOrder, reset = false, statusFilter = rateStatusFilter) => {
     if (targetPage === 1 || reset) {
       setLoading(true);
     } else {
@@ -97,15 +111,20 @@ export default function MasterSkuManager({ onMasterSkusUpdated }) {
 
     try {
       const token = localStorage.getItem('token');
+      const params = {
+        page: targetPage,
+        limit: 50,
+        search: typeof searchQuery === 'string' ? searchQuery.trim() : '',
+        sortBy: sortField,
+        sortOrder: sortDir
+      };
+      if (statusFilter && statusFilter !== 'all') {
+        params.rateStatus = statusFilter;
+      }
+
       const res = await axios.get('/api/master-sku', {
         headers: { Authorization: `Bearer ${token}` },
-        params: {
-          page: targetPage,
-          limit: 50,
-          search: searchQuery,
-          sortBy: sortField,
-          sortOrder: sortDir
-        }
+        params
       });
 
       if (res.data.success) {
@@ -135,19 +154,22 @@ export default function MasterSkuManager({ onMasterSkusUpdated }) {
       setLoading(false);
       setLoadingMore(false);
     }
-  }, [search, sortBy, sortOrder]);
+  }, [sortBy, sortOrder, rateStatusFilter]);
 
-  // Initial load
+  // Debounced real-time search on typing, sorting, & rateStatus filter changes
   useEffect(() => {
-    fetchSkus(1, search, sortBy, sortOrder, true);
-  }, []);
+    const timer = setTimeout(() => {
+      fetchSkus(1, search, sortBy, sortOrder, true, rateStatusFilter);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [search, sortBy, sortOrder, rateStatusFilter, fetchSkus]);
 
   // Infinite Scroll IntersectionObserver
   useEffect(() => {
     const observer = new IntersectionObserver(
       (entries) => {
         if (entries[0].isIntersecting && hasMore && !loading && !loadingMore) {
-          fetchSkus(page + 1, search, sortBy, sortOrder, false);
+          fetchSkus(page + 1, search, sortBy, sortOrder, false, rateStatusFilter);
         }
       },
       { threshold: 0.1 }
@@ -163,7 +185,68 @@ export default function MasterSkuManager({ onMasterSkusUpdated }) {
         observer.unobserve(target);
       }
     };
-  }, [hasMore, loading, loadingMore, page, search, sortBy, sortOrder, fetchSkus]);
+  }, [hasMore, loading, loadingMore, page, search, sortBy, sortOrder, rateStatusFilter, fetchSkus]);
+
+  // Save quick rates directly from the Origin Details modal
+  const handleSaveQuickRate = async (e) => {
+    e.preventDefault();
+    if (!selectedOriginDetails?.origin) return;
+    setSavingQuickRate(true);
+    try {
+      const token = localStorage.getItem('token');
+      const payload = {
+        origin: selectedOriginDetails.origin.trim(),
+        itemRate: Number(quickRateData.itemRate) || 0,
+        boxRate: Number(quickRateData.boxRate) || 0,
+        boxReturnRate: Number(quickRateData.boxReturnRate) || 0,
+        imageLink: (quickRateData.imageLink || '').trim(),
+        size: (quickRateData.size || selectedOriginDetails.originSize || selectedOriginDetails.size || '').trim()
+      };
+
+      const res = await axios.post('/api/master-rate', payload, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+
+      if (res.data?.success) {
+        toast.success(`Rates for "${selectedOriginDetails.origin}" saved & linked successfully!`);
+        const updatedRate = res.data.item || payload;
+
+        // Update active modal details
+        setSelectedOriginDetails(prev => ({
+          ...prev,
+          itemRate: updatedRate.itemRate,
+          boxRate: updatedRate.boxRate,
+          boxReturnRate: updatedRate.boxReturnRate,
+          imageLink: updatedRate.imageLink,
+          originSize: updatedRate.size,
+          hasRate: true
+        }));
+        setIsQuickConfiguring(false);
+
+        // Update matching table rows
+        setItems(prev => prev.map(it => {
+          if ((it.origin || '').trim().toLowerCase() === selectedOriginDetails.origin.trim().toLowerCase()) {
+            return {
+              ...it,
+              itemRate: updatedRate.itemRate,
+              boxRate: updatedRate.boxRate,
+              boxReturnRate: updatedRate.boxReturnRate,
+              imageLink: updatedRate.imageLink,
+              hasRate: true
+            };
+          }
+          return it;
+        }));
+
+        onMasterSkusUpdated?.();
+      }
+    } catch (err) {
+      console.error('Error saving quick rate:', err);
+      toast.error(err.response?.data?.message || 'Failed to save rate record');
+    } finally {
+      setSavingQuickRate(false);
+    }
+  };
 
   // Column Sort Click Handler
   const handleSort = (field) => {
@@ -353,7 +436,7 @@ export default function MasterSkuManager({ onMasterSkusUpdated }) {
       };
 
       const skuKey = findKey(['sku', 'sku id', 'style id', 'item code', 'product id', 'skuid']);
-      const originKey = findKey(['origin', 'city', 'warehouse', 'source', 'location']);
+      const originKey = findKey(['original product name', 'original product', 'origin', 'product name', 'item name', 'origin name', 'city', 'warehouse', 'source', 'location']);
       const sizeKey = findKey(['size', 'sizes']);
 
       if (!skuKey) {
@@ -884,18 +967,55 @@ export default function MasterSkuManager({ onMasterSkusUpdated }) {
                 type="text"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search by SKU, Origin, or Size..."
-                className="w-full pl-10 pr-24 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                placeholder="Search by SKU, Original Product Name, or Size..."
+                className="w-full pl-10 pr-24 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition"
               />
               <FaSearch className="w-4 h-4 text-gray-400 absolute left-3 top-3" />
+              {search && (
+                <button
+                  type="button"
+                  onClick={() => setSearch('')}
+                  className="absolute right-20 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 p-1 cursor-pointer"
+                  title="Clear search"
+                >
+                  <FaTimes className="w-3 h-3" />
+                </button>
+              )}
               <button
                 type="submit"
-                className="absolute right-1 top-1 bottom-1 px-3 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-md transition"
+                className="absolute right-1 top-1 bottom-1 px-3 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-md transition cursor-pointer"
               >
                 Search
               </button>
             </div>
           </form>
+
+          {/* Rate Status Filter Pills */}
+          <div className="flex items-center bg-gray-100 p-1 rounded-lg text-xs font-semibold self-start sm:self-auto">
+            <button
+              type="button"
+              onClick={() => setRateStatusFilter('all')}
+              className={`px-3 py-1.5 rounded-md transition cursor-pointer ${rateStatusFilter === 'all' ? 'bg-white text-gray-900 shadow-xs' : 'text-gray-500 hover:text-gray-900'}`}
+            >
+              All SKUs
+            </button>
+            <button
+              type="button"
+              onClick={() => setRateStatusFilter('configured')}
+              className={`px-3 py-1.5 rounded-md transition cursor-pointer flex items-center gap-1.5 ${rateStatusFilter === 'configured' ? 'bg-white text-emerald-700 shadow-xs font-bold' : 'text-gray-500 hover:text-gray-900'}`}
+            >
+              <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+              <span>Configured</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setRateStatusFilter('not_configured')}
+              className={`px-3 py-1.5 rounded-md transition cursor-pointer flex items-center gap-1.5 ${rateStatusFilter === 'not_configured' ? 'bg-white text-amber-700 shadow-xs font-bold' : 'text-gray-500 hover:text-gray-900'}`}
+            >
+              <span className="w-2 h-2 rounded-full bg-amber-500"></span>
+              <span>Not Configured</span>
+            </button>
+          </div>
 
           <div className="flex items-center gap-2 flex-wrap">
             <button
@@ -931,7 +1051,8 @@ export default function MasterSkuManager({ onMasterSkusUpdated }) {
           <table className="min-w-full divide-y divide-gray-200 text-sm text-left">
             <thead className="bg-gray-50 text-gray-600 font-semibold uppercase text-xs select-none">
               <tr>
-                <th scope="col" className="px-6 py-3.5 w-16">#</th>
+                <th scope="col" className="px-3 py-3.5 w-16 text-center">Image</th>
+                <th scope="col" className="px-4 py-3.5 w-12 text-center">#</th>
                 <th
                   scope="col"
                   onClick={() => handleSort('sku')}
@@ -951,10 +1072,10 @@ export default function MasterSkuManager({ onMasterSkusUpdated }) {
                   scope="col"
                   onClick={() => handleSort('origin')}
                   className="px-6 py-3.5 cursor-pointer hover:bg-gray-100 transition-colors group"
-                  title="Click to sort by Origin"
+                  title="Click to sort by Original Product Name"
                 >
                   <div className="flex items-center gap-1.5">
-                    <span>Origin</span>
+                    <span>Original Product Name</span>
                     {sortBy === 'origin' ? (
                       sortOrder === 'asc' ? <FaSortUp className="text-blue-600 w-3.5 h-3.5" /> : <FaSortDown className="text-blue-600 w-3.5 h-3.5" />
                     ) : (
@@ -1019,13 +1140,51 @@ export default function MasterSkuManager({ onMasterSkusUpdated }) {
                   const rowNumber = idx + 1;
                   return (
                     <tr key={item._id || idx} className="hover:bg-blue-50/40 transition-colors">
-                      <td className="px-6 py-3.5 text-gray-400 font-mono text-xs">{rowNumber}</td>
+                      <td className="px-3 py-2 text-center">
+                        {item.imageLink ? (
+                          <div
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => setPreviewImage({ url: item.imageLink, title: `${item.sku} • ${item.origin || 'No Origin'}` })}
+                            className="inline-block relative group cursor-pointer focus:outline-hidden"
+                            title="Click to view full image"
+                          >
+                            <img
+                              src={item.imageLink}
+                              alt={item.origin || item.sku}
+                              className="w-10 h-10 object-cover rounded-lg border border-gray-200 shadow-2xs group-hover:scale-110 group-hover:shadow-md transition-all duration-200"
+                              onError={(e) => {
+                                e.target.style.display = 'none';
+                                if (e.target.nextSibling) e.target.nextSibling.style.display = 'flex';
+                              }}
+                            />
+                            <div className="hidden w-10 h-10 rounded-lg bg-gray-100 border border-gray-200 items-center justify-center text-gray-400">
+                              <FaImage className="w-4 h-4" />
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="w-10 h-10 rounded-lg bg-gray-50 border border-dashed border-gray-200 flex items-center justify-center text-gray-300 mx-auto" title="No image for this origin">
+                            <FaImage className="w-4 h-4 opacity-50" />
+                          </div>
+                        )}
+                      </td>
+                      <td className="px-4 py-3.5 text-center text-gray-400 font-mono text-xs">{rowNumber}</td>
                       <td className="px-6 py-3.5 font-bold font-mono text-gray-900">{item.sku}</td>
                       <td className="px-6 py-3.5">
                         {item.origin ? (
-                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200">
-                            {item.origin}
-                          </span>
+                          <div className="inline-flex items-center gap-1.5 flex-wrap">
+                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200">
+                              {item.origin}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setSelectedOriginDetails(item)}
+                              className="inline-flex items-center justify-center p-1 text-blue-500 hover:text-blue-800 hover:bg-blue-100 rounded-md transition-colors cursor-pointer group"
+                              title="View Origin Rate Details & Rates"
+                            >
+                              <FaArrowRight className="w-2.5 h-2.5 transition-transform group-hover:translate-x-0.5 text-blue-600" />
+                            </button>
+                          </div>
                         ) : (
                           <span className="text-gray-400 text-xs italic">—</span>
                         )}
@@ -1233,13 +1392,13 @@ export default function MasterSkuManager({ onMasterSkusUpdated }) {
 
               <div>
                 <label className="block text-xs font-semibold text-gray-700 uppercase mb-1">
-                  Origin (City / Location / Group)
+                  Original Product Name / Origin
                 </label>
                 <input
                   type="text"
                   value={formData.origin}
                   onChange={(e) => setFormData({ ...formData, origin: e.target.value })}
-                  placeholder="e.g. Surat, Mumbai, Jaipur"
+                  placeholder="e.g. ardh nag chain, isr_2661, ring_01"
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500"
                 />
               </div>
@@ -1312,13 +1471,13 @@ export default function MasterSkuManager({ onMasterSkusUpdated }) {
 
               <div>
                 <label className="block text-xs font-semibold text-gray-700 uppercase mb-1">
-                  Origin (City / Location / Group)
+                  Original Product Name / Origin
                 </label>
                 <input
                   type="text"
                   value={formData.origin}
                   onChange={(e) => setFormData({ ...formData, origin: e.target.value })}
-                  placeholder="e.g. Surat, Mumbai, Jaipur"
+                  placeholder="e.g. ardh nag chain, isr_2661, ring_01"
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500"
                 />
               </div>
@@ -1853,6 +2012,338 @@ export default function MasterSkuManager({ onMasterSkusUpdated }) {
                   </>
                 )}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Origin Details Modal */}
+      {selectedOriginDetails && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs animate-in fade-in"
+          onClick={() => setSelectedOriginDetails(null)}
+        >
+          <div
+            className="bg-white rounded-2xl max-w-md w-full overflow-hidden shadow-2xl relative border border-gray-100"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div className="px-6 py-4 bg-gradient-to-r from-emerald-600 to-teal-700 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <FaBoxOpen className="w-5 h-5 flex-shrink-0 text-emerald-200" />
+                <div className="min-w-0">
+                  <h3 className="font-bold text-base leading-tight truncate">Origin Details</h3>
+                  <p className="text-xs text-emerald-100 truncate">Linked from Master Rate File</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedOriginDetails(null)}
+                className="p-1.5 text-emerald-100 hover:text-white rounded-lg hover:bg-white/10 transition cursor-pointer"
+              >
+                <FaTimes className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-6 space-y-5">
+              {/* Top Banner with Image and Origin Name */}
+              <div className="flex items-center gap-4 bg-gray-50 p-4 rounded-xl border border-gray-200/80">
+                {selectedOriginDetails.imageLink ? (
+                  <div
+                    onClick={() => setPreviewImage({ url: selectedOriginDetails.imageLink, title: selectedOriginDetails.origin })}
+                    className="relative group cursor-pointer flex-shrink-0"
+                    title="Click to zoom image"
+                  >
+                    <img
+                      src={selectedOriginDetails.imageLink}
+                      alt={selectedOriginDetails.origin}
+                      className="w-16 h-16 object-cover rounded-xl border border-gray-200 shadow-xs group-hover:scale-105 transition"
+                    />
+                    <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 rounded-xl flex items-center justify-center text-white text-xs font-semibold transition">
+                      <FaEye className="w-4 h-4" />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="w-16 h-16 rounded-xl bg-gray-100 border border-dashed border-gray-300 flex items-center justify-center text-gray-400 flex-shrink-0">
+                    <FaImage className="w-6 h-6 opacity-40" />
+                  </div>
+                )}
+                <div className="min-w-0 flex-1">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-gray-400 block">Original Product Name</span>
+                  <div className="font-bold text-gray-900 text-base truncate" title={selectedOriginDetails.origin}>
+                    {selectedOriginDetails.origin}
+                  </div>
+                  <div className="mt-1 flex items-center gap-2">
+                    <span className="text-xs font-mono bg-blue-50 text-blue-700 px-2 py-0.5 rounded border border-blue-200 truncate">
+                      SKU: {selectedOriginDetails.sku}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Rate Stats Grid */}
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-emerald-50/60 border border-emerald-100 p-3 rounded-xl text-center">
+                  <span className="text-[11px] font-semibold text-emerald-800 uppercase tracking-wide block">Rate</span>
+                  <div className="text-lg font-bold text-emerald-700 mt-0.5">
+                    {selectedOriginDetails.itemRate != null && selectedOriginDetails.itemRate !== '' ? `₹${selectedOriginDetails.itemRate}` : '—'}
+                  </div>
+                </div>
+                <div className="bg-blue-50/60 border border-blue-100 p-3 rounded-xl text-center">
+                  <span className="text-[11px] font-semibold text-blue-800 uppercase tracking-wide block">Dabbi Rate</span>
+                  <div className="text-lg font-bold text-blue-700 mt-0.5">
+                    {selectedOriginDetails.boxRate != null && selectedOriginDetails.boxRate !== '' ? `₹${selectedOriginDetails.boxRate}` : '—'}
+                  </div>
+                </div>
+                <div className="bg-purple-50/60 border border-purple-100 p-3 rounded-xl text-center">
+                  <span className="text-[11px] font-semibold text-purple-800 uppercase tracking-wide block">Return Rate</span>
+                  <div className="text-lg font-bold text-purple-700 mt-0.5">
+                    {selectedOriginDetails.boxReturnRate != null && selectedOriginDetails.boxReturnRate !== '' ? `₹${selectedOriginDetails.boxReturnRate}` : '—'}
+                  </div>
+                </div>
+              </div>
+
+              {/* Unconfigured Alert & Quick Action */}
+              {selectedOriginDetails.hasRate === false && !isQuickConfiguring && (
+                <div className="bg-gradient-to-br from-amber-50 to-orange-50 border border-amber-200 rounded-xl p-3.5 space-y-2.5">
+                  <div className="flex items-start gap-2.5">
+                    <FaExclamationTriangle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
+                    <div className="text-xs text-amber-900 flex-1">
+                      <span className="font-bold block">Rate Record Not Configured</span>
+                      <p className="text-amber-700 mt-0.5">
+                        &quot;{selectedOriginDetails.origin}&quot; does not have rate details in Master Rate File.
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setQuickRateData({
+                        itemRate: '',
+                        boxRate: '',
+                        boxReturnRate: '',
+                        imageLink: '',
+                        size: selectedOriginDetails.originSize || selectedOriginDetails.size || ''
+                      });
+                      setIsQuickConfiguring(true);
+                    }}
+                    className="w-full py-2 px-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 shadow-xs transition cursor-pointer"
+                  >
+                    <FaPlus className="w-3 h-3" />
+                    <span>Quick Configure Rates Here</span>
+                  </button>
+                </div>
+              )}
+
+              {/* Inline Quick Configure Form */}
+              {selectedOriginDetails.hasRate === false && isQuickConfiguring && (
+                <form onSubmit={handleSaveQuickRate} className="bg-white border-2 border-emerald-500/40 rounded-xl p-3.5 space-y-3 shadow-sm">
+                  <div className="flex items-center justify-between border-b border-gray-100 pb-2">
+                    <span className="text-xs font-bold text-gray-800 flex items-center gap-1.5">
+                      <FaMoneyBillWave className="text-emerald-600 w-3.5 h-3.5" />
+                      <span>Configure Rates for &quot;{selectedOriginDetails.origin}&quot;</span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setIsQuickConfiguring(false)}
+                      className="text-gray-400 hover:text-gray-600 p-0.5 cursor-pointer"
+                    >
+                      <FaTimes className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-600 uppercase mb-1">Rate (₹) *</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        required
+                        value={quickRateData.itemRate}
+                        onChange={(e) => setQuickRateData(prev => ({ ...prev, itemRate: e.target.value }))}
+                        placeholder="0.00"
+                        className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-xs font-semibold focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-600 uppercase mb-1">Dabbi Rate (₹)</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={quickRateData.boxRate}
+                        onChange={(e) => setQuickRateData(prev => ({ ...prev, boxRate: e.target.value }))}
+                        placeholder="0.00"
+                        className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-xs font-semibold focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-600 uppercase mb-1">Return Rate (₹)</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={quickRateData.boxReturnRate}
+                        onChange={(e) => setQuickRateData(prev => ({ ...prev, boxReturnRate: e.target.value }))}
+                        placeholder="0.00"
+                        className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-xs font-semibold focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-600 uppercase mb-1">Size</label>
+                      <input
+                        type="text"
+                        value={quickRateData.size}
+                        onChange={(e) => setQuickRateData(prev => ({ ...prev, size: e.target.value }))}
+                        placeholder="e.g. Large, Small"
+                        className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-xs focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-600 uppercase mb-1">Image URL (Optional)</label>
+                      <input
+                        type="url"
+                        value={quickRateData.imageLink}
+                        onChange={(e) => setQuickRateData(prev => ({ ...prev, imageLink: e.target.value }))}
+                        placeholder="https://..."
+                        className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-xs focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-end gap-2 pt-1 border-t border-gray-100">
+                    <button
+                      type="button"
+                      onClick={() => setIsQuickConfiguring(false)}
+                      className="px-3 py-1.5 border border-gray-300 rounded-lg text-xs text-gray-700 hover:bg-gray-50 cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={savingQuickRate}
+                      className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow-xs"
+                    >
+                      {savingQuickRate ? <FaSync className="animate-spin w-3 h-3" /> : <FaCheckCircle className="w-3 h-3" />}
+                      <span>{savingQuickRate ? 'Saving...' : 'Save & Link Rate'}</span>
+                    </button>
+                  </div>
+                </form>
+              )}
+
+              {/* Size & Status */}
+              <div className="bg-gray-50/80 rounded-xl p-3.5 border border-gray-200/80 space-y-2 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-500 font-medium">Catalog Size:</span>
+                  <span className="font-semibold text-gray-800">
+                    {selectedOriginDetails.originSize || selectedOriginDetails.size || 'Not specified'}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-500 font-medium">Rate Record Status:</span>
+                  <span className={`inline-flex items-center gap-1 font-semibold ${selectedOriginDetails.hasRate !== false ? 'text-emerald-700' : 'text-amber-600'}`}>
+                    <FaCheckCircle className="w-3 h-3" />
+                    <span>{selectedOriginDetails.hasRate !== false ? 'Configured in Master Rate File' : 'Not configured yet'}</span>
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Modal Footer Actions */}
+            <div className="p-4 bg-gray-50 border-t border-gray-100 flex items-center justify-between gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedOriginDetails(null);
+                  setIsQuickConfiguring(false);
+                }}
+                className="px-4 py-2 bg-white border border-gray-300 text-gray-700 text-xs font-semibold rounded-lg hover:bg-gray-100 transition cursor-pointer"
+              >
+                Close
+              </button>
+              {selectedOriginDetails.hasRate !== false ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const targetOrigin = selectedOriginDetails.origin;
+                    setSelectedOriginDetails(null);
+                    if (onNavigateToRate) {
+                      onNavigateToRate(targetOrigin);
+                    } else {
+                      router.push(`/extract-sku?tab=master-rate&search=${encodeURIComponent(targetOrigin)}`);
+                    }
+                  }}
+                  className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-lg shadow-xs transition cursor-pointer"
+                >
+                  <span>Open in Master Rate File</span>
+                  <FaArrowRight className="w-3 h-3" />
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const targetOrigin = selectedOriginDetails.origin;
+                    const targetSize = selectedOriginDetails.originSize || selectedOriginDetails.size || '';
+                    setSelectedOriginDetails(null);
+                    setIsQuickConfiguring(false);
+                    if (onNavigateToRate) {
+                      onNavigateToRate(targetOrigin, { autoAdd: true, size: targetSize });
+                    } else {
+                      router.push(`/extract-sku?tab=master-rate&addOrigin=${encodeURIComponent(targetOrigin)}&size=${encodeURIComponent(targetSize)}`);
+                    }
+                  }}
+                  className="flex items-center gap-1.5 px-4 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white text-xs font-semibold rounded-lg shadow-sm transition cursor-pointer"
+                  title="Open Master Rate File with Add form pre-filled"
+                >
+                  <FaPlus className="w-3 h-3" />
+                  <span>Configure in Master Rate File</span>
+                  <FaArrowRight className="w-3 h-3" />
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Image Preview Modal (z-[100] so it always opens ABOVE any open modal) */}
+      {previewImage && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-4 backdrop-blur-xs animate-in fade-in"
+          onClick={() => setPreviewImage(null)}
+        >
+          <div
+            className="bg-white rounded-2xl max-w-lg w-full overflow-hidden shadow-2xl relative"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-4 bg-gray-900 text-white flex items-center justify-between">
+              <span className="font-semibold text-sm truncate">{previewImage.title || 'Image Preview'}</span>
+              <button
+                type="button"
+                onClick={() => setPreviewImage(null)}
+                className="p-1 text-gray-400 hover:text-white rounded-lg hover:bg-gray-800 transition cursor-pointer"
+              >
+                <FaTimes className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-4 flex items-center justify-center bg-gray-50 max-h-[75vh]">
+              <img
+                src={previewImage.url}
+                alt={previewImage.title || 'Preview'}
+                className="max-h-[70vh] max-w-full object-contain rounded-lg shadow-sm"
+              />
+            </div>
+            <div className="p-3 bg-white border-t border-gray-200 flex items-center justify-between text-xs text-gray-500">
+              <span className="truncate max-w-[280px]">{previewImage.url}</span>
+              <a
+                href={previewImage.url}
+                target="_blank"
+                rel="noreferrer"
+                className="text-blue-600 hover:underline flex-shrink-0 font-medium ml-2"
+              >
+                Open in new tab &rarr;
+              </a>
             </div>
           </div>
         </div>

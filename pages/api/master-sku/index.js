@@ -2,6 +2,7 @@ import connectToDatabase from '../../../lib/mongodb';
 import MasterSku from '../../../models/MasterSku';
 import MasterSkuHistory from '../../../models/MasterSkuHistory';
 import MasterSkuSnapshot from '../../../models/MasterSkuSnapshot';
+import MasterRate from '../../../models/MasterRate';
 import { authMiddleware } from '../common/common.services';
 
 async function handler(req, res) {
@@ -16,7 +17,7 @@ async function handler(req, res) {
 
   if (method === 'GET') {
     try {
-      const { all, search, page = 1, limit = 50, sortBy = 'sku', sortOrder = 'asc' } = req.query;
+      const { all, search, page = 1, limit = 50, sortBy = 'sku', sortOrder = 'asc', rateStatus } = req.query;
 
       // Fast query for sorting components to load the entire mapping
       if (all === 'true') {
@@ -35,6 +36,24 @@ async function handler(req, res) {
           { origin: queryRegex },
           { size: queryRegex }
         ];
+      }
+
+      // Filter by rate configuration status if specified
+      if (rateStatus === 'configured' || rateStatus === 'not_configured') {
+        const rawConfiguredOrigins = await MasterRate.find({ company: companyId }).distinct('origin');
+        const configuredOrigins = rawConfiguredOrigins.filter(Boolean);
+        if (rateStatus === 'configured') {
+          filter.origin = { $in: configuredOrigins };
+        } else if (rateStatus === 'not_configured') {
+          filter.$and = filter.$and || [];
+          filter.$and.push({
+            $or: [
+              { origin: { $nin: configuredOrigins } },
+              { origin: null },
+              { origin: '' }
+            ]
+          });
+        }
       }
 
       const pageNum = Math.max(1, parseInt(page, 10) || 1);
@@ -67,6 +86,32 @@ async function handler(req, res) {
           .limit(3)
           .lean()
       ]);
+
+      // Enrich SKU items with imageLink from MasterRate based on origin
+      const distinctOrigins = [...new Set(items.map(it => (it.origin || '').trim()).filter(Boolean))];
+      if (distinctOrigins.length > 0) {
+        const rates = await MasterRate.find({
+          company: companyId,
+          origin: { $in: distinctOrigins.map(o => new RegExp(`^${o.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i')) }
+        }).select('origin imageLink itemRate boxRate boxReturnRate size _id updatedAt').lean();
+
+        const rateMap = new Map();
+        for (const r of rates) {
+          rateMap.set((r.origin || '').trim().toLowerCase(), r);
+        }
+
+        for (const it of items) {
+          const k = (it.origin || '').trim().toLowerCase();
+          const match = rateMap.get(k);
+          it.imageLink = match?.imageLink || '';
+          it.itemRate = match?.itemRate ?? null;
+          it.boxRate = match?.boxRate ?? null;
+          it.boxReturnRate = match?.boxReturnRate ?? null;
+          it.originSize = match?.size || '';
+          it.rateId = match?._id || null;
+          it.hasRate = !!match;
+        }
+      }
 
       return res.status(200).json({
         success: true,

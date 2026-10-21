@@ -1,4 +1,5 @@
 import zlib from 'zlib';
+import mongoose from 'mongoose';
 import connectToDatabase from '../../../lib/mongodb';
 import MasterSku from '../../../models/MasterSku';
 import MasterSkuHistory from '../../../models/MasterSkuHistory';
@@ -15,6 +16,16 @@ export const config = {
   }
 };
 
+const gunzipAsync = (data) =>
+  new Promise((resolve, reject) => {
+    zlib.gunzip(data, (err, res) => (err ? reject(err) : resolve(res)));
+  });
+
+const gzipAsync = (data) =>
+  new Promise((resolve, reject) => {
+    zlib.gzip(data, (err, res) => (err ? reject(err) : resolve(res)));
+  });
+
 async function handler(req, res) {
   const { method } = req;
   const user = req.userData;
@@ -24,6 +35,8 @@ async function handler(req, res) {
   }
 
   const companyId = user.company;
+  const companyObjectId = new mongoose.Types.ObjectId(companyId);
+  const userObjectId = user._id ? new mongoose.Types.ObjectId(user._id) : null;
   await connectToDatabase();
 
   // GET: Fetch snapshot data for download or preview
@@ -33,13 +46,13 @@ async function handler(req, res) {
 
       let snapshot = null;
       if (snapshotId) {
-        snapshot = await MasterSkuSnapshot.findOne({ _id: snapshotId, company: companyId });
+        snapshot = await MasterSkuSnapshot.findOne({ _id: snapshotId, company: companyObjectId });
       } else if (historyId) {
-        snapshot = await MasterSkuSnapshot.findOne({ historyId, company: companyId });
+        snapshot = await MasterSkuSnapshot.findOne({ historyId, company: companyObjectId });
         if (!snapshot) {
-          const history = await MasterSkuHistory.findOne({ _id: historyId, company: companyId });
+          const history = await MasterSkuHistory.findOne({ _id: historyId, company: companyObjectId });
           if (history?.details?.snapshotId) {
-            snapshot = await MasterSkuSnapshot.findOne({ _id: history.details.snapshotId, company: companyId });
+            snapshot = await MasterSkuSnapshot.findOne({ _id: history.details.snapshotId, company: companyObjectId });
           }
         }
       }
@@ -47,24 +60,24 @@ async function handler(req, res) {
       // If no snapshot record found (e.g., initial upload before snapshot model existed),
       // fallback to current active master SKUs if matching
       if (!snapshot) {
-        const activeCount = await MasterSku.countDocuments({ company: companyId });
+        const activeCount = await MasterSku.countDocuments({ company: companyObjectId });
         if (activeCount > 0) {
-          const activeItems = await MasterSku.find({ company: companyId })
+          const activeItems = await MasterSku.find({ company: companyObjectId })
             .select('sku origin size')
             .lean();
           
-          const historyItem = historyId ? await MasterSkuHistory.findOne({ _id: historyId, company: companyId }) : null;
+          const historyItem = historyId ? await MasterSkuHistory.findOne({ _id: historyId, company: companyObjectId }) : null;
           const fileName = historyItem?.details?.fileName || 'master_sku_snapshot.xlsx';
           const snapshotItems = activeItems.map(i => ({ sku: i.sku, origin: i.origin || '', size: i.size || '' }));
-          const compressedBuffer = zlib.gzipSync(Buffer.from(JSON.stringify(snapshotItems)));
+          const compressedBuffer = await gzipAsync(Buffer.from(JSON.stringify(snapshotItems)));
           
           snapshot = await MasterSkuSnapshot.create({
-            company: companyId,
+            company: companyObjectId,
             historyId: historyItem?._id,
             fileName,
             totalCount: activeItems.length,
             compressedData: compressedBuffer,
-            performedBy: historyItem?.performedBy || user._id,
+            performedBy: historyItem?.performedBy || userObjectId,
             performedByName: historyItem?.performedByName || user.name || 'User'
           });
 
@@ -86,8 +99,8 @@ async function handler(req, res) {
         return res.status(404).json({ message: 'Snapshot data not available for this upload entry.' });
       }
 
-      // Decompress snapshot
-      const unzipped = zlib.gunzipSync(snapshot.compressedData);
+      // Decompress snapshot asynchronously without blocking event loop
+      const unzipped = await gunzipAsync(snapshot.compressedData);
       const items = JSON.parse(unzipped.toString('utf-8'));
 
       return res.status(200).json({
@@ -113,32 +126,32 @@ async function handler(req, res) {
 
       let snapshot = null;
       if (snapshotId) {
-        snapshot = await MasterSkuSnapshot.findOne({ _id: snapshotId, company: companyId });
+        snapshot = await MasterSkuSnapshot.findOne({ _id: snapshotId, company: companyObjectId });
       } else if (historyId) {
-        snapshot = await MasterSkuSnapshot.findOne({ historyId, company: companyId });
+        snapshot = await MasterSkuSnapshot.findOne({ historyId, company: companyObjectId });
         if (!snapshot) {
-          const history = await MasterSkuHistory.findOne({ _id: historyId, company: companyId });
+          const history = await MasterSkuHistory.findOne({ _id: historyId, company: companyObjectId });
           if (history?.details?.snapshotId) {
-            snapshot = await MasterSkuSnapshot.findOne({ _id: history.details.snapshotId, company: companyId });
+            snapshot = await MasterSkuSnapshot.findOne({ _id: history.details.snapshotId, company: companyObjectId });
           }
         }
       }
 
       // If snapshot is still missing, check if active Master SKUs can provide it
       if (!snapshot) {
-        const activeCount = await MasterSku.countDocuments({ company: companyId });
-        const historyItem = historyId ? await MasterSkuHistory.findOne({ _id: historyId, company: companyId }) : null;
+        const activeCount = await MasterSku.countDocuments({ company: companyObjectId });
+        const historyItem = historyId ? await MasterSkuHistory.findOne({ _id: historyId, company: companyObjectId }) : null;
         if (activeCount > 0 && historyItem) {
-          const activeItems = await MasterSku.find({ company: companyId }).select('sku origin size').lean();
+          const activeItems = await MasterSku.find({ company: companyObjectId }).select('sku origin size').lean();
           const snapshotItems = activeItems.map(i => ({ sku: i.sku, origin: i.origin || '', size: i.size || '' }));
-          const compressedBuffer = zlib.gzipSync(Buffer.from(JSON.stringify(snapshotItems)));
+          const compressedBuffer = await gzipAsync(Buffer.from(JSON.stringify(snapshotItems)));
           snapshot = await MasterSkuSnapshot.create({
-            company: companyId,
+            company: companyObjectId,
             historyId: historyItem._id,
             fileName: historyItem.details?.fileName || 'master_file.xlsx',
             totalCount: activeItems.length,
             compressedData: compressedBuffer,
-            performedBy: historyItem.performedBy || user._id,
+            performedBy: historyItem.performedBy || userObjectId,
             performedByName: historyItem.performedByName || user.name || 'User'
           });
           await MasterSkuHistory.updateOne({ _id: historyItem._id }, { 'details.snapshotId': snapshot._id });
@@ -151,36 +164,42 @@ async function handler(req, res) {
         });
       }
 
-      // Decompress items
-      const unzipped = zlib.gunzipSync(snapshot.compressedData);
+      // Decompress items asynchronously
+      const unzipped = await gunzipAsync(snapshot.compressedData);
       const rawItems = JSON.parse(unzipped.toString('utf-8'));
 
       if (!Array.isArray(rawItems) || rawItems.length === 0) {
         return res.status(400).json({ message: 'Snapshot contains no valid SKUs' });
       }
 
-      const cleanItems = rawItems.map(item => ({
-        company: companyId,
-        sku: String(item.sku).trim(),
-        origin: item.origin != null ? String(item.origin).trim() : '',
-        size: item.size != null ? String(item.size).trim() : '',
-        lastModifiedBy: user._id,
-        lastModifiedByName: user.name || user.username || 'User'
-      }));
+      const now = new Date();
+      const cleanItems = rawItems
+        .filter(item => item && item.sku)
+        .map(item => ({
+          company: companyObjectId,
+          sku: String(item.sku).trim(),
+          origin: item.origin != null ? String(item.origin).trim() : '',
+          size: item.size != null ? String(item.size).trim() : '',
+          lastModifiedBy: userObjectId,
+          lastModifiedByName: user.name || user.username || 'User',
+          createdAt: now,
+          updatedAt: now
+        }));
 
       // Replace current active SKUs with snapshot
-      const previousCount = await MasterSku.countDocuments({ company: companyId });
-      await MasterSku.deleteMany({ company: companyId });
+      const previousCount = await MasterSku.countDocuments({ company: companyObjectId });
+      await MasterSku.deleteMany({ company: companyObjectId });
 
-      const chunkSize = 1000;
+      // Fast bulk insert using native MongoDB collection directly (bypasses Mongoose document casting & validation overhead)
+      const chunkSize = 10000;
       for (let i = 0; i < cleanItems.length; i += chunkSize) {
         const chunk = cleanItems.slice(i, i + chunkSize);
-        await MasterSku.insertMany(chunk, { ordered: false });
+        await MasterSku.collection.insertMany(chunk, { ordered: false });
       }
 
       const desc = `Restored Master File from "${snapshot.fileName}" snapshot (${cleanItems.length} SKUs, replaced ${previousCount} SKUs)`;
       await MasterSkuHistory.create({
-        company: companyId,
+        company: companyObjectId,
         action: 'UPLOAD',
         description: desc,
         details: {
@@ -190,16 +209,16 @@ async function handler(req, res) {
           isRestore: true,
           snapshotId: snapshot._id
         },
-        performedBy: user._id,
+        performedBy: userObjectId,
         performedByName: user.name || user.username || 'User'
       });
 
       const [updatedHistory, updatedUploadHistory] = await Promise.all([
-        MasterSkuHistory.find({ company: companyId })
+        MasterSkuHistory.find({ company: companyObjectId })
           .sort({ createdAt: -1 })
           .limit(3)
           .lean(),
-        MasterSkuHistory.find({ company: companyId, action: 'UPLOAD' })
+        MasterSkuHistory.find({ company: companyObjectId, action: 'UPLOAD' })
           .sort({ createdAt: -1 })
           .limit(3)
           .lean()
@@ -230,47 +249,47 @@ async function handler(req, res) {
 
       let historyItem = null;
       if (historyId) {
-        historyItem = await MasterSkuHistory.findOne({ _id: historyId, company: companyId });
+        historyItem = await MasterSkuHistory.findOne({ _id: historyId, company: companyObjectId });
       }
 
       const targetSnapshotId = snapshotId || historyItem?.details?.snapshotId;
       if (targetSnapshotId) {
-        await MasterSkuSnapshot.deleteOne({ _id: targetSnapshotId, company: companyId });
+        await MasterSkuSnapshot.deleteOne({ _id: targetSnapshotId, company: companyObjectId });
       }
       if (historyId) {
-        await MasterSkuSnapshot.deleteMany({ historyId, company: companyId });
+        await MasterSkuSnapshot.deleteMany({ historyId, company: companyObjectId });
       }
 
       const shouldDeleteActiveSkus = req.query.deleteActiveSkus === 'true' || req.body?.deleteActiveSkus === true;
       let deletedActiveCount = 0;
       if (shouldDeleteActiveSkus) {
-        deletedActiveCount = await MasterSku.countDocuments({ company: companyId });
-        await MasterSku.deleteMany({ company: companyId });
+        deletedActiveCount = await MasterSku.countDocuments({ company: companyObjectId });
+        await MasterSku.deleteMany({ company: companyObjectId });
       }
 
       if (historyItem) {
-        await MasterSkuHistory.deleteOne({ _id: historyItem._id, company: companyId });
+        await MasterSkuHistory.deleteOne({ _id: historyItem._id, company: companyObjectId });
       } else if (historyId) {
-        await MasterSkuHistory.deleteOne({ _id: historyId, company: companyId });
+        await MasterSkuHistory.deleteOne({ _id: historyId, company: companyObjectId });
       }
 
       if (shouldDeleteActiveSkus) {
         await MasterSkuHistory.create({
-          company: companyId,
+          company: companyObjectId,
           action: 'DELETE',
           description: `Deleted entire active Master SKU file (${deletedActiveCount.toLocaleString()} SKUs removed)`,
           details: { totalCount: deletedActiveCount, deletedAll: true, deletedAt: new Date() },
-          performedBy: user._id,
+          performedBy: userObjectId,
           performedByName: user.name || user.username || 'User'
         });
       }
 
       const [updatedHistory, updatedUploadHistory] = await Promise.all([
-        MasterSkuHistory.find({ company: companyId })
+        MasterSkuHistory.find({ company: companyObjectId })
           .sort({ createdAt: -1 })
           .limit(3)
           .lean(),
-        MasterSkuHistory.find({ company: companyId, action: 'UPLOAD' })
+        MasterSkuHistory.find({ company: companyObjectId, action: 'UPLOAD' })
           .sort({ createdAt: -1 })
           .limit(3)
           .lean()

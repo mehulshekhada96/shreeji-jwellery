@@ -289,6 +289,7 @@ const Layout = ({ children }) => {
                       { href: '/extract-sku?tab=amazon', label: 'Amazon Sort', icon: SiAmazon },
                       { href: '/extract-sku?tab=myntra', label: 'Myntra Sort', icon: FaBoxOpen },
                       { href: '/extract-sku?tab=master-sku', label: 'Master SKU File', icon: FaDatabase },
+                      { href: '/extract-sku?tab=master-rate', label: 'Master Rate File', icon: FaMoneyBillWave },
                       { href: '/extract-sku?tab=excel', label: 'Generate Excel', icon: FaFileAlt, flag: 'isExcelFromPDF' },
                     ].filter(item => !item.flag || checkFeature(item.flag))}
                   />
