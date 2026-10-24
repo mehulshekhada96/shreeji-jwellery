@@ -70,7 +70,9 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
     expenses: 0,
     withdrawals: 0,
     bankBalance: 0,
-    meeshoPending: 0
+    meeshoPending: 0,
+    companyBankBalances: {},
+    companyPendingAmounts: {}
   });
 
   // Quick SKU & Rate Mapping Modal State (રીઅલ-ટાઇમ રેટ અને મેપિંગ)
@@ -146,6 +148,86 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
   const [companySort, setCompanySort] = useState({ field: 'netAmount', order: 'desc' });
   const [skuSort, setSkuSort] = useState({ field: 'inventoryAmount', order: 'desc' });
   const [expandedMonths, setExpandedMonths] = useState(new Set([moment().format('YYYY-MM')]));
+
+  // SKU Sorting handler & icon renderer
+  const handleSkuSort = (field) => {
+    setSkuSort(prev => {
+      if (prev.field === field) {
+        return { field, order: prev.order === 'desc' ? 'asc' : 'desc' };
+      }
+      return { field, order: (field === 'sku' || field === 'origin') ? 'asc' : 'desc' };
+    });
+  };
+
+  const renderSkuSortIcon = (field) => {
+    if (skuSort.field === field) {
+      return skuSort.order === 'desc' ? (
+        <FaSortDown className="w-3 h-3 text-indigo-600 inline ml-1" />
+      ) : (
+        <FaSortUp className="w-3 h-3 text-indigo-600 inline ml-1" />
+      );
+    }
+    return <FaSort className="w-2.5 h-2.5 text-gray-300 group-hover:text-gray-500 inline ml-1 transition-colors" />;
+  };
+
+  // Multi-Company Bank Account & Pending calculation helpers
+  const isMultiCompany = selectedCompanies.length > 1;
+
+  const totalBankBalance = useMemo(() => {
+    if (isMultiCompany) {
+      return selectedCompanies.reduce((sum, c) => {
+        const val = finalHisabState.companyBankBalances?.[c];
+        return sum + (Number(val) || 0);
+      }, 0);
+    }
+    return Number(finalHisabState.bankBalance) || 0;
+  }, [isMultiCompany, selectedCompanies, finalHisabState.companyBankBalances, finalHisabState.bankBalance]);
+
+  const totalMeeshoPending = useMemo(() => {
+    if (isMultiCompany) {
+      return selectedCompanies.reduce((sum, c) => {
+        const val = finalHisabState.companyPendingAmounts?.[c];
+        return sum + (Number(val) || 0);
+      }, 0);
+    }
+    return Number(finalHisabState.meeshoPending) || 0;
+  }, [isMultiCompany, selectedCompanies, finalHisabState.companyPendingAmounts, finalHisabState.meeshoPending]);
+
+  const handleCompanyBankBalanceChange = (comp, val) => {
+    setFinalHisabState(prev => {
+      const updated = {
+        ...(prev.companyBankBalances || {}),
+        [comp]: val
+      };
+      const total = selectedCompanies.reduce((sum, c) => {
+        const v = c === comp ? val : updated[c];
+        return sum + (Number(v) || 0);
+      }, 0);
+      return {
+        ...prev,
+        companyBankBalances: updated,
+        bankBalance: total
+      };
+    });
+  };
+
+  const handleCompanyPendingAmountChange = (comp, val) => {
+    setFinalHisabState(prev => {
+      const updated = {
+        ...(prev.companyPendingAmounts || {}),
+        [comp]: val
+      };
+      const total = selectedCompanies.reduce((sum, c) => {
+        const v = c === comp ? val : updated[c];
+        return sum + (Number(v) || 0);
+      }, 0);
+      return {
+        ...prev,
+        companyPendingAmounts: updated,
+        meeshoPending: total
+      };
+    });
+  };
 
   // Selected Origin for quick preview modal
   const [previewOrigin, setPreviewOrigin] = useState(null);
@@ -425,7 +507,7 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
     }
   };
 
-  // Filtered and sorted SKUs with instant real-time client-side search
+  // Filtered and sorted SKUs with instant real-time client-side search & percentages
   const displayedSkus = useMemo(() => {
     let list = billingData.skuWise || [];
     if (onlyMissingRates) {
@@ -439,8 +521,31 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
         (item.size && item.size.toLowerCase().includes(q))
       );
     }
+    const withPercentages = list.map(item => {
+      const invQty = Number(item.inventoryQty) || 0;
+      const cancelQty = Number(item.cancelledQty) || 0;
+      const retQty = Number(item.returnsQty) || 0;
+      const custRetQty = Number(item.customerReturnsQty) || 0;
+      const itemTotalRetQty = retQty + custRetQty;
+
+      const cancelPercent = invQty > 0 ? (cancelQty / invQty) * 100 : 0;
+      const returnPercent = invQty > 0 ? (retQty / invQty) * 100 : 0;
+      const custReturnPercent = invQty > 0 ? (custRetQty / invQty) * 100 : 0;
+      const totalReturnPercent = invQty > 0 ? (itemTotalRetQty / invQty) * 100 : 0;
+
+      return {
+        ...item,
+        cancelPercent,
+        returnPercent,
+        custReturnPercent,
+        totalReturnQty: itemTotalRetQty,
+        totalReturnPercent,
+        totalReturnAmount: (Number(item.returnsAmount) || 0) + (Number(item.customerReturnsAmount) || 0)
+      };
+    });
+
     const { field, order } = skuSort;
-    return [...list].sort((a, b) => {
+    return withPercentages.sort((a, b) => {
       const valA = a[field] ?? 0;
       const valB = b[field] ?? 0;
       if (typeof valA === 'string') {
@@ -536,8 +641,8 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
       const totalRet = summary.totalReturnsAmount || (summary.cancelledAmount + summary.returnsAmount + summary.customerReturnsAmount);
       const finalGoodsPayable = totalGoodsPayable + totalExp - totalUpad - totalRet;
       
-      const bankBal = Number(finalHisabState.bankBalance) || 0;
-      const meeshoPend = Number(finalHisabState.meeshoPending) || 0;
+      const bankBal = totalBankBalance;
+      const meeshoPend = totalMeeshoPending;
       const totalLiquid = bankBal + meeshoPend;
       const netProfit = totalLiquid - finalGoodsPayable;
 
@@ -567,6 +672,25 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
         ['', '', '', '', '', '', ''],
         [`${compTitle} ને માલના લેવાના થતાં ફાઈનલ રૂ. (જે આગળના હિસાબમાં લેવા)`, '', '', '', finalGoodsPayable]
       ];
+
+      // Add Company-wise breakdown in Sheet 1 if multiple companies are selected
+      if (isMultiCompany) {
+        finalHisabRows.push(['', '', '', '', '', '', '']);
+        finalHisabRows.push(['--- કંપની-વાઈઝ બેંક અને પેન્ડિંગ વિગત ---', '', '', '', '', '', '']);
+        selectedCompanies.forEach(comp => {
+          finalHisabRows.push([
+            `${comp} બેંક ખાતામાં પડેલા રૂ.`, '', '', '',
+            Number(finalHisabState.companyBankBalances?.[comp]) || 0, '',
+            `${comp} મીશો / માર્કેટપ્લેસ આઉટસ્ટેન્ડીંગ રૂ.`, '', '', '',
+            Number(finalHisabState.companyPendingAmounts?.[comp]) || 0
+          ]);
+        });
+        finalHisabRows.push([
+          'ટોટલ બધા બેંક ખાતામાં રકમ', '', '', '', totalBankBalance, '',
+          'ટોટલ માર્કેટપ્લેસ આઉટસ્ટેન્ડીંગ', '', '', '', totalMeeshoPending
+        ]);
+      }
+
       const wsFinalHisab = XLSX.utils.aoa_to_sheet(finalHisabRows);
       XLSX.utils.book_append_sheet(wb, wsFinalHisab, 'ફાઈનલ હિસાબ');
 
@@ -608,12 +732,17 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
         'Gross Dispatched (₹)': s.grossInventoryAmount,
         'Cancelled Qty': s.cancelledQty,
         'Cancelled Amount (₹)': s.cancelledAmount,
+        'Cancel %': `${(s.cancelPercent || 0).toFixed(1)}%`,
         'Courier Returns Qty': s.returnsQty,
         'Courier Returns Amount (₹)': s.returnsAmount,
+        'Courier Return %': `${(s.returnPercent || 0).toFixed(1)}%`,
         'Customer Returns Qty': s.customerReturnsQty,
         'Raw Cust Returns (100%) (₹)': s.rawCustomerReturnsAmount,
         [`Customer Returns (${custReturnPercent}%) (₹)`]: s.customerReturnsAmount,
+        'Customer Return %': `${(s.custReturnPercent || 0).toFixed(1)}%`,
+        'Total Returns Qty': s.totalReturnQty,
         'Total Returns (₹)': s.totalReturnsAmount,
+        'Total Return %': `${(s.totalReturnPercent || 0).toFixed(1)}%`,
         'Net Qty': s.netQty,
         'Net Billing (₹)': s.netAmount,
         'Rate Status': s.hasRate ? 'Configured' : 'Missing Rate',
@@ -1545,23 +1674,240 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
                     </div>
                   </div>
                 )}
+                {/* Quick Sort Toolbar */}
+                <div className="px-4 py-2.5 bg-gray-50/80 border-y border-gray-200 flex flex-wrap items-center justify-between gap-2 text-xs">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="text-gray-500 font-bold flex items-center gap-1 text-[11px] uppercase tracking-wider">
+                      <FaSort className="w-3 h-3 text-indigo-500" />
+                      <span>Quick Sort:</span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setSkuSort({ field: 'totalReturnPercent', order: 'desc' })}
+                      className={`px-2 py-1 rounded-md text-[11px] font-bold transition cursor-pointer flex items-center gap-1 ${
+                        skuSort.field === 'totalReturnPercent' && skuSort.order === 'desc'
+                          ? 'bg-rose-600 text-white shadow-2xs'
+                          : 'bg-white text-rose-700 border border-rose-200 hover:bg-rose-50'
+                      }`}
+                      title="Sort by highest total returns rate"
+                    >
+                      <span>🔥 Highest Returns</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSkuSort({ field: 'totalReturnPercent', order: 'asc' })}
+                      className={`px-2 py-1 rounded-md text-[11px] font-bold transition cursor-pointer flex items-center gap-1 ${
+                        skuSort.field === 'totalReturnPercent' && skuSort.order === 'asc'
+                          ? 'bg-emerald-600 text-white shadow-2xs'
+                          : 'bg-white text-emerald-700 border border-emerald-200 hover:bg-emerald-50'
+                      }`}
+                      title="Sort by lowest total returns rate"
+                    >
+                      <span>🌿 Lowest Returns</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSkuSort({ field: 'cancelPercent', order: 'desc' })}
+                      className={`px-2 py-1 rounded-md text-[11px] font-bold transition cursor-pointer flex items-center gap-1 ${
+                        skuSort.field === 'cancelPercent' && skuSort.order === 'desc'
+                          ? 'bg-rose-600 text-white shadow-2xs'
+                          : 'bg-white text-rose-700 border border-rose-200 hover:bg-rose-50'
+                      }`}
+                      title="Sort by highest cancel percentage"
+                    >
+                      <span>❌ Most Cancelled %</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSkuSort({ field: 'inventoryAmount', order: 'desc' })}
+                      className={`px-2 py-1 rounded-md text-[11px] font-bold transition cursor-pointer flex items-center gap-1 ${
+                        skuSort.field === 'inventoryAmount' && skuSort.order === 'desc'
+                          ? 'bg-indigo-600 text-white shadow-2xs'
+                          : 'bg-white text-indigo-700 border border-indigo-200 hover:bg-indigo-50'
+                      }`}
+                      title="Sort by highest dispatched amount"
+                    >
+                      <span>📦 Most Dispatched</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSkuSort({ field: 'netAmount', order: 'desc' })}
+                      className={`px-2 py-1 rounded-md text-[11px] font-bold transition cursor-pointer flex items-center gap-1 ${
+                        skuSort.field === 'netAmount' && skuSort.order === 'desc'
+                          ? 'bg-blue-600 text-white shadow-2xs'
+                          : 'bg-white text-blue-700 border border-blue-200 hover:bg-blue-50'
+                      }`}
+                      title="Sort by highest net billing total"
+                    >
+                      <span>💰 Highest Net Total</span>
+                    </button>
+                  </div>
+                  <div className="text-[11px] text-gray-500 font-medium">
+                    Click any column header to sort (↑ / ↓)
+                  </div>
+                </div>
+
                 <table className="w-full text-left border-collapse">
                   <thead>
                     <tr className="bg-gray-50 text-[10px] font-bold text-gray-600 uppercase tracking-wider border-b border-gray-200">
-                      <th className="px-4 py-3.5">SKU & Product Name</th>
-                      <th className="px-3 py-3.5 text-center">Unit Rates</th>
-                      <th className="px-3 py-3.5 text-center">Effective Unit</th>
-                      <th className="px-4 py-3.5 text-right text-emerald-800">Dispatched (Inv)</th>
-                      <th className="px-4 py-3.5 text-right text-rose-800">Cancelled</th>
-                      <th className="px-4 py-3.5 text-right text-amber-800">Courier Ret</th>
-                      <th className="px-4 py-3.5 text-right text-purple-800">Customer Ret</th>
-                      <th className="px-5 py-3.5 text-right text-blue-900 font-black">Net Total (₹)</th>
+                      {/* SKU & Product Name */}
+                      <th
+                        className="px-4 py-3.5 group cursor-pointer select-none hover:bg-gray-100/70 transition-colors"
+                        onClick={() => handleSkuSort('sku')}
+                        title="Sort by SKU / Product Name"
+                      >
+                        <div className="flex items-center gap-1">
+                          <span>SKU & Product Name</span>
+                          {renderSkuSortIcon('sku')}
+                        </div>
+                      </th>
+
+                      {/* Unit Rates */}
+                      <th
+                        className="px-3 py-3.5 text-center group cursor-pointer select-none hover:bg-gray-100/70 transition-colors"
+                        onClick={() => handleSkuSort('itemRate')}
+                        title="Sort by Unit Rate"
+                      >
+                        <div className="flex items-center justify-center gap-1">
+                          <span>Unit Rates</span>
+                          {renderSkuSortIcon('itemRate')}
+                        </div>
+                      </th>
+
+                      {/* Effective Unit */}
+                      <th
+                        className="px-3 py-3.5 text-center group cursor-pointer select-none hover:bg-gray-100/70 transition-colors"
+                        onClick={() => handleSkuSort('invUnitRate')}
+                        title="Sort by Effective Invoice Rate"
+                      >
+                        <div className="flex items-center justify-center gap-1">
+                          <span>Effective Unit</span>
+                          {renderSkuSortIcon('invUnitRate')}
+                        </div>
+                      </th>
+
+                      {/* Dispatched */}
+                      <th
+                        className="px-4 py-3.5 text-right text-emerald-800 group cursor-pointer select-none hover:bg-emerald-50/60 transition-colors"
+                        onClick={() => handleSkuSort('inventoryAmount')}
+                        title="Sort by Dispatched Amount"
+                      >
+                        <div className="flex items-center justify-end gap-1">
+                          <span>Dispatched (Inv)</span>
+                          {renderSkuSortIcon('inventoryAmount')}
+                        </div>
+                      </th>
+
+                      {/* Cancelled */}
+                      <th className="px-3 py-3.5 text-right text-rose-800">
+                        <div className="flex items-center justify-end gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => handleSkuSort('cancelledAmount')}
+                            className="inline-flex items-center gap-0.5 hover:text-rose-950 font-bold cursor-pointer"
+                            title="Sort by Cancelled Amount (₹)"
+                          >
+                            <span>Cancelled</span>
+                            {renderSkuSortIcon('cancelledAmount')}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleSkuSort('cancelPercent')}
+                            className={`px-1.5 py-0.5 rounded text-[9px] font-bold border transition cursor-pointer ${
+                              skuSort.field === 'cancelPercent'
+                                ? 'bg-rose-600 text-white border-rose-600 shadow-2xs'
+                                : 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100'
+                            }`}
+                            title="Sort by Cancel %"
+                          >
+                            % {skuSort.field === 'cancelPercent' && (skuSort.order === 'desc' ? '↓' : '↑')}
+                          </button>
+                        </div>
+                      </th>
+
+                      {/* Courier Ret */}
+                      <th className="px-3 py-3.5 text-right text-amber-800">
+                        <div className="flex items-center justify-end gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => handleSkuSort('returnsAmount')}
+                            className="inline-flex items-center gap-0.5 hover:text-amber-950 font-bold cursor-pointer"
+                            title="Sort by Courier Return Amount (₹)"
+                          >
+                            <span>Courier Ret</span>
+                            {renderSkuSortIcon('returnsAmount')}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleSkuSort('returnPercent')}
+                            className={`px-1.5 py-0.5 rounded text-[9px] font-bold border transition cursor-pointer ${
+                              skuSort.field === 'returnPercent'
+                                ? 'bg-amber-600 text-white border-amber-600 shadow-2xs'
+                                : 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100'
+                            }`}
+                            title="Sort by Courier Return %"
+                          >
+                            % {skuSort.field === 'returnPercent' && (skuSort.order === 'desc' ? '↓' : '↑')}
+                          </button>
+                        </div>
+                      </th>
+
+                      {/* Customer Ret */}
+                      <th className="px-3 py-3.5 text-right text-purple-800">
+                        <div className="flex items-center justify-end gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => handleSkuSort('customerReturnsAmount')}
+                            className="inline-flex items-center gap-0.5 hover:text-purple-950 font-bold cursor-pointer"
+                            title="Sort by Customer Return Amount (₹)"
+                          >
+                            <span>Customer Ret</span>
+                            {renderSkuSortIcon('customerReturnsAmount')}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleSkuSort('custReturnPercent')}
+                            className={`px-1.5 py-0.5 rounded text-[9px] font-bold border transition cursor-pointer ${
+                              skuSort.field === 'custReturnPercent'
+                                ? 'bg-purple-600 text-white border-purple-600 shadow-2xs'
+                                : 'bg-purple-50 text-purple-700 border-purple-200 hover:bg-purple-100'
+                            }`}
+                            title="Sort by Customer Return %"
+                          >
+                            % {skuSort.field === 'custReturnPercent' && (skuSort.order === 'desc' ? '↓' : '↑')}
+                          </button>
+                        </div>
+                      </th>
+
+                      {/* Total Ret % */}
+                      <th
+                        className="px-3 py-3.5 text-center text-rose-900 bg-rose-50/50 group cursor-pointer select-none hover:bg-rose-100/60 transition-colors"
+                        onClick={() => handleSkuSort('totalReturnPercent')}
+                        title="Sort by Total Return % (Courier + Customer Returns)"
+                      >
+                        <div className="flex items-center justify-center gap-1 font-black">
+                          <span>Total Ret %</span>
+                          {renderSkuSortIcon('totalReturnPercent')}
+                        </div>
+                      </th>
+
+                      {/* Net Total */}
+                      <th
+                        className="px-5 py-3.5 text-right text-blue-900 font-black group cursor-pointer select-none hover:bg-blue-50/60 transition-colors"
+                        onClick={() => handleSkuSort('netAmount')}
+                        title="Sort by Net Total Amount (₹)"
+                      >
+                        <div className="flex items-center justify-end gap-1">
+                          <span>Net Total (₹)</span>
+                          {renderSkuSortIcon('netAmount')}
+                        </div>
+                      </th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100 text-xs">
                     {displayedSkus.length === 0 ? (
                       <tr>
-                        <td colSpan="8" className="py-12 text-center text-gray-400 font-medium">
+                        <td colSpan="9" className="py-12 text-center text-gray-400 font-medium">
                           No matching SKUs found.
                         </td>
                       </tr>
@@ -1670,21 +2016,68 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
                           </td>
 
                           {/* Cancelled */}
-                          <td className="px-4 py-3.5 text-right font-medium text-rose-700">
+                          <td className="px-3 py-3.5 text-right font-medium text-rose-700">
                             <div className="font-bold">{formatINR(s.cancelledAmount)}</div>
-                            <div className="text-[10px] text-gray-400">{s.cancelledQty} pcs</div>
+                            <div className="flex items-center justify-end gap-1.5 mt-0.5">
+                              <span className="text-[10px] text-gray-400">{s.cancelledQty} pcs</span>
+                              <span
+                                className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-rose-50 text-rose-700 border border-rose-200 cursor-pointer hover:bg-rose-100 transition"
+                                onClick={() => handleSkuSort('cancelPercent')}
+                                title="Click to sort by Cancel %"
+                              >
+                                {(s.cancelPercent || 0).toFixed(1)}%
+                              </span>
+                            </div>
                           </td>
 
                           {/* Courier Returns */}
-                          <td className="px-4 py-3.5 text-right font-medium text-amber-700">
+                          <td className="px-3 py-3.5 text-right font-medium text-amber-700">
                             <div className="font-bold">{formatINR(s.returnsAmount)}</div>
-                            <div className="text-[10px] text-gray-400">{s.returnsQty} pcs</div>
+                            <div className="flex items-center justify-end gap-1.5 mt-0.5">
+                              <span className="text-[10px] text-gray-400">{s.returnsQty} pcs</span>
+                              <span
+                                className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200 cursor-pointer hover:bg-amber-100 transition"
+                                onClick={() => handleSkuSort('returnPercent')}
+                                title="Click to sort by Courier Return %"
+                              >
+                                {(s.returnPercent || 0).toFixed(1)}%
+                              </span>
+                            </div>
                           </td>
 
                           {/* Customer Returns */}
-                          <td className="px-4 py-3.5 text-right font-medium text-purple-700">
+                          <td className="px-3 py-3.5 text-right font-medium text-purple-700">
                             <div className="font-bold">{formatINR(s.customerReturnsAmount)}</div>
-                            <div className="text-[10px] text-gray-400">{s.customerReturnsQty} pcs</div>
+                            <div className="flex items-center justify-end gap-1.5 mt-0.5">
+                              <span className="text-[10px] text-gray-400">{s.customerReturnsQty} pcs</span>
+                              <span
+                                className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-purple-50 text-purple-700 border border-purple-200 cursor-pointer hover:bg-purple-100 transition"
+                                onClick={() => handleSkuSort('custReturnPercent')}
+                                title="Click to sort by Customer Return %"
+                              >
+                                {(s.custReturnPercent || 0).toFixed(1)}%
+                              </span>
+                            </div>
+                          </td>
+
+                          {/* Total Return % */}
+                          <td className="px-3 py-3.5 text-center font-bold bg-gray-50/40">
+                            <span
+                              className={`inline-block px-2.5 py-0.5 rounded-full text-[11px] font-black border shadow-2xs cursor-pointer hover:opacity-90 transition ${
+                                (s.totalReturnPercent || 0) > 25
+                                  ? 'bg-rose-100 text-rose-800 border-rose-300'
+                                  : (s.totalReturnPercent || 0) > 15
+                                  ? 'bg-amber-100 text-amber-800 border-amber-300'
+                                  : 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                              }`}
+                              onClick={() => handleSkuSort('totalReturnPercent')}
+                              title={`Total Returns: ${s.totalReturnQty} pcs (${(s.totalReturnPercent || 0).toFixed(1)}% of dispatched). Click to sort.`}
+                            >
+                              {(s.totalReturnPercent || 0).toFixed(1)}%
+                            </span>
+                            <div className="text-[10px] text-gray-400 font-normal mt-0.5">
+                              {s.totalReturnQty} pcs ret
+                            </div>
                           </td>
 
                           {/* Net Amount */}
@@ -1881,44 +2274,110 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
                   </div>
 
                   {/* 1. Bank Balance */}
-                  <div className="flex items-center justify-between gap-3 text-xs">
-                    <label className="text-gray-700 font-medium flex-1">
-                      {getCompanyTitle()} બેંક ખાતામાં પડેલા રૂ.:
-                    </label>
-                    <div className="flex items-center gap-1">
-                      <span className="text-gray-400 font-semibold">₹</span>
-                      <input
-                        type="number"
-                        value={finalHisabState.bankBalance}
-                        onChange={(e) => setFinalHisabState(prev => ({ ...prev, bankBalance: e.target.value }))}
-                        className="w-28 px-2 py-1 border border-gray-300 rounded-lg text-right font-bold text-gray-800 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none"
-                        placeholder="0"
-                      />
+                  {isMultiCompany ? (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between text-xs font-bold text-gray-700">
+                        <div className="flex items-center gap-1.5">
+                          <FaBuilding className="text-blue-600 w-3 h-3" />
+                          <span>કંપની-વાઈઝ બેંક ખાતામાં પડેલા રૂ. (Bank Accounts):</span>
+                        </div>
+                        <span className="text-[11px] font-bold text-blue-800 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-200">
+                          કુલ બેંક: {formatINR(totalBankBalance)}
+                        </span>
+                      </div>
+                      <div className="space-y-2 pl-2.5 border-l-2 border-blue-400 bg-blue-50/20 p-2.5 rounded-r-xl">
+                        {selectedCompanies.map(comp => (
+                          <div key={comp} className="flex items-center justify-between gap-3 text-xs">
+                            <label className="text-gray-700 font-medium flex-1 truncate" title={comp}>
+                              • <span className="font-bold text-gray-900">{comp}</span> બેંક ખાતામાં રૂ.:
+                            </label>
+                            <div className="flex items-center gap-1">
+                              <span className="text-gray-400 font-semibold">₹</span>
+                              <input
+                                type="number"
+                                value={finalHisabState.companyBankBalances?.[comp] ?? ''}
+                                onChange={(e) => handleCompanyBankBalanceChange(comp, e.target.value)}
+                                className="w-28 px-2 py-1 border border-gray-300 rounded-lg text-right font-bold text-gray-800 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none bg-white shadow-2xs"
+                                placeholder="0"
+                              />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
                     </div>
-                  </div>
+                  ) : (
+                    <div className="flex items-center justify-between gap-3 text-xs">
+                      <label className="text-gray-700 font-medium flex-1">
+                        {getCompanyTitle()} બેંક ખાતામાં પડેલા રૂ.:
+                      </label>
+                      <div className="flex items-center gap-1">
+                        <span className="text-gray-400 font-semibold">₹</span>
+                        <input
+                          type="number"
+                          value={finalHisabState.bankBalance}
+                          onChange={(e) => setFinalHisabState(prev => ({ ...prev, bankBalance: e.target.value }))}
+                          className="w-28 px-2 py-1 border border-gray-300 rounded-lg text-right font-bold text-gray-800 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none"
+                          placeholder="0"
+                        />
+                      </div>
+                    </div>
+                  )}
 
                   {/* 2. Meesho Pending Receivable */}
-                  <div className="flex items-center justify-between gap-3 text-xs">
-                    <label className="text-gray-700 font-medium flex-1">
-                      {getCompanyTitle()} મીશો / માર્કેટપ્લેસ માંથી લેવાના નીકળતા આઉટસ્ટેન્ડીંગ રૂ.:
-                    </label>
-                    <div className="flex items-center gap-1">
-                      <span className="text-gray-400 font-semibold">₹</span>
-                      <input
-                        type="number"
-                        value={finalHisabState.meeshoPending}
-                        onChange={(e) => setFinalHisabState(prev => ({ ...prev, meeshoPending: e.target.value }))}
-                        className="w-28 px-2 py-1 border border-gray-300 rounded-lg text-right font-bold text-gray-800 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none"
-                        placeholder="0"
-                      />
+                  {isMultiCompany ? (
+                    <div className="space-y-2 pt-2 border-t border-gray-100">
+                      <div className="flex items-center justify-between text-xs font-bold text-gray-700">
+                        <div className="flex items-center gap-1.5">
+                          <FaMoneyBillWave className="text-purple-600 w-3 h-3" />
+                          <span>કંપની-વાઈઝ મીશો / માર્કેટપ્લેસ આઉટસ્ટેન્ડીંગ રૂ. (Pending):</span>
+                        </div>
+                        <span className="text-[11px] font-bold text-purple-800 bg-purple-50 px-2 py-0.5 rounded-md border border-purple-200">
+                          કુલ પેન્ડિંગ: {formatINR(totalMeeshoPending)}
+                        </span>
+                      </div>
+                      <div className="space-y-2 pl-2.5 border-l-2 border-purple-400 bg-purple-50/20 p-2.5 rounded-r-xl">
+                        {selectedCompanies.map(comp => (
+                          <div key={comp} className="flex items-center justify-between gap-3 text-xs">
+                            <label className="text-gray-700 font-medium flex-1 truncate" title={comp}>
+                              • <span className="font-bold text-gray-900">{comp}</span> મીશો આઉટસ્ટેન્ડીંગ રૂ.:
+                            </label>
+                            <div className="flex items-center gap-1">
+                              <span className="text-gray-400 font-semibold">₹</span>
+                              <input
+                                type="number"
+                                value={finalHisabState.companyPendingAmounts?.[comp] ?? ''}
+                                onChange={(e) => handleCompanyPendingAmountChange(comp, e.target.value)}
+                                className="w-28 px-2 py-1 border border-gray-300 rounded-lg text-right font-bold text-gray-800 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none bg-white shadow-2xs"
+                                placeholder="0"
+                              />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
                     </div>
-                  </div>
+                  ) : (
+                    <div className="flex items-center justify-between gap-3 text-xs">
+                      <label className="text-gray-700 font-medium flex-1">
+                        {getCompanyTitle()} મીશો / માર્કેટપ્લેસ માંથી લેવાના નીકળતા આઉટસ્ટેન્ડીંગ રૂ.:
+                      </label>
+                      <div className="flex items-center gap-1">
+                        <span className="text-gray-400 font-semibold">₹</span>
+                        <input
+                          type="number"
+                          value={finalHisabState.meeshoPending}
+                          onChange={(e) => setFinalHisabState(prev => ({ ...prev, meeshoPending: e.target.value }))}
+                          className="w-28 px-2 py-1 border border-gray-300 rounded-lg text-right font-bold text-gray-800 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none"
+                          placeholder="0"
+                        />
+                      </div>
+                    </div>
+                  )}
 
                   {/* Total Liquid Receivables */}
                   <div className="p-2.5 rounded-xl bg-emerald-50/70 border border-emerald-200/60 flex items-center justify-between text-xs font-bold text-emerald-900">
                     <span>લેવાનું નીકળતું ટોટલ પેમેન્ટ રૂ. (Liquid Funds):</span>
                     <span className="text-sm font-black">
-                      {formatINR((Number(finalHisabState.bankBalance) || 0) + (Number(finalHisabState.meeshoPending) || 0))}
+                      {formatINR(totalBankBalance + totalMeeshoPending)}
                     </span>
                   </div>
 
@@ -1926,7 +2385,7 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
                   {(() => {
                     const totalGoods = (Number(finalHisabState.prevBalance) || 0) + (summary.grossInventoryAmount || summary.inventoryAmount);
                     const finalPayable = totalGoods + (Number(finalHisabState.expenses) || 0) - (Number(finalHisabState.withdrawals) || 0) - summary.totalReturnsAmount;
-                    const totalLiquid = (Number(finalHisabState.bankBalance) || 0) + (Number(finalHisabState.meeshoPending) || 0);
+                    const totalLiquid = totalBankBalance + totalMeeshoPending;
                     const netProfit = totalLiquid - finalPayable;
 
                     return (
