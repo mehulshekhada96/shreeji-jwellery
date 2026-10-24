@@ -135,9 +135,7 @@ const handler = async (req, res) => {
     } catch (error) {
       res.status(500).json({ message: 'Error updating item', error: error.message });
     }
-  }
-  {
-    // res.setHeader('Allow', ['GET']);
+  } else {
     res.status(405).end(`Method ${method} Not Allowed`);
   }
 };
