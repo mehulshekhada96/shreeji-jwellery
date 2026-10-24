@@ -679,7 +679,7 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
                   </span>
                 </h1>
                 <p className="text-xs sm:text-sm text-gray-500 mt-0.5">
-                  Calculated using live Master Rates: Dispatched = <span className="font-semibold text-gray-700">Rate + Dabbi + ₹{printRate} Print</span> | Cancelled = <span className="font-semibold text-gray-700">Rate Only</span> | Returns = <span className="font-semibold text-gray-700">RTO 100% + Cust {custReturnPercent}%</span>
+                  Calculated using live Master Rates: Dispatched = <span className="font-semibold text-gray-700">Rate + Dabbi + ₹{printRate} Print</span> | Cancelled = <span className="font-semibold text-gray-700">Rate + Dabbi Return</span> | Returns = <span className="font-semibold text-gray-700">RTO 100% + Cust {custReturnPercent}%</span>
                 </p>
               </div>
             </div>
@@ -2197,8 +2197,8 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
                         </div>
                         <div className="p-1.5 rounded-lg bg-rose-50 border border-rose-200">
                           <div className="text-rose-700 font-bold uppercase tracking-wider text-[9px]">Cancel Unit</div>
-                          <div className="text-rose-900 font-black text-xs mt-0.5">₹{itm.toFixed(2)}</div>
-                          <div className="text-rose-600 text-[8px]">(માત્ર માલ)</div>
+                          <div className="text-rose-900 font-black text-xs mt-0.5">₹{(itm + rbx).toFixed(2)}</div>
+                          <div className="text-rose-600 text-[8px]">(માલ + રીટર્ન ડબ્બી)</div>
                         </div>
                         <div className="p-1.5 rounded-lg bg-amber-50 border border-amber-200">
                           <div className="text-amber-700 font-bold uppercase tracking-wider text-[9px]">Return Unit</div>

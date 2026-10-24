@@ -263,10 +263,10 @@ async function handler(req, res) {
 
       // Formula:
       // Meesho inventory = rate + dabbi
-      // Cancel order = rate only (NO calculation of dabbi rate in cancel order)
+      // Cancel order = rate + dabbi return rate
       // Return or customer return = rate + dabbi return rate
       const invUnitRate = itemRate + boxRate;
-      const cancelUnitRate = itemRate;
+      const cancelUnitRate = itemRate + boxReturnRate;
       const retUnitRate = itemRate + boxReturnRate;
 
       const result = {
@@ -429,7 +429,7 @@ async function handler(req, res) {
       if (qty <= 0) return;
       const orderDate = r.startDate || r.selectedDate;
       const rates = resolveRates(r.sku, orderDate);
-      const amount = qty * rates.cancelUnitRate; // NO calculation of dabbi rate in cancel order (itemRate only)
+      const amount = qty * rates.cancelUnitRate; // Cancel order = rate + dabbi return rate
 
       summary.cancelledQty += qty;
       summary.cancelledAmount += amount;
