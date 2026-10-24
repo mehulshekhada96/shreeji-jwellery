@@ -1128,7 +1128,7 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
           </div>
           <div className="text-xs text-gray-500 mt-1 flex items-center justify-between font-medium">
             <span>{formatQty(summary.cancelledQty)} Units</span>
-            <span className="text-[11px] text-rose-600 font-semibold">Rate Only (No Dabbi)</span>
+            <span className="text-[11px] text-rose-600 font-semibold">Rate + Dabbi Return</span>
           </div>
         </div>
 
