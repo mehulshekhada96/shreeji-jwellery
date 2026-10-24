@@ -125,7 +125,7 @@ async function handler(req, res) {
       const replaceDesc = recordedPrevCount > 0 ? ` (replaced ${recordedPrevCount} previous origins)` : '';
       const description = `Uploaded Master Rate File${fileLabel} with ${allRates.length} Origins & Rates${replaceDesc}`;
 
-      await MasterRateHistory.create({
+      const historyDoc = await MasterRateHistory.create({
         company: companyObjectId,
         action: 'UPLOAD',
         description,
@@ -138,6 +138,8 @@ async function handler(req, res) {
         performedBy: userObjectId,
         performedByName: user.name || user.username || 'User'
       });
+
+      await MasterRateSnapshot.updateOne({ _id: snapshot._id }, { historyId: historyDoc._id });
 
       const [updatedHistory, updatedUploadHistory] = await Promise.all([
         MasterRateHistory.find({ company: companyObjectId })

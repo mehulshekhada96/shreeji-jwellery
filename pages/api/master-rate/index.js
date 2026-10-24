@@ -2,7 +2,12 @@ import connectToDatabase from '../../../lib/mongodb';
 import MasterRate from '../../../models/MasterRate';
 import MasterRateHistory from '../../../models/MasterRateHistory';
 import MasterRateSnapshot from '../../../models/MasterRateSnapshot';
+import MasterSku from '../../../models/MasterSku';
 import { authMiddleware } from '../common/common.services';
+
+function escapeRegex(text) {
+  return text.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+}
 
 async function handler(req, res) {
   const { method } = req;
@@ -22,7 +27,7 @@ async function handler(req, res) {
       // Fast query to load all master rates (used for lookups or export)
       if (all === 'true') {
         const rates = await MasterRate.find({ company: companyId })
-          .select('origin imageLink itemRate boxRate boxReturnRate size')
+          .select('origin imageLink itemRate boxRate boxReturnRate size rateHistory')
           .lean();
         return res.status(200).json({ success: true, count: rates.length, rates });
       }
@@ -30,11 +35,27 @@ async function handler(req, res) {
       // Paginated query for management UI
       const filter = { company: companyId };
       if (search && search.trim()) {
-        const queryRegex = new RegExp(search.trim(), 'i');
-        filter.$or = [
+        const escaped = escapeRegex(search.trim());
+        const queryRegex = new RegExp(escaped, 'i');
+
+        // Look up any origins corresponding to this SKU search in MasterSku
+        const matchedOriginsFromSku = await MasterSku.find({
+          company: companyId,
+          sku: queryRegex
+        }).distinct('origin');
+
+        const cleanOrigins = matchedOriginsFromSku.filter(Boolean);
+
+        const orConditions = [
           { origin: queryRegex },
           { size: queryRegex }
         ];
+
+        if (cleanOrigins.length > 0) {
+          orConditions.push({ origin: { $in: cleanOrigins } });
+        }
+
+        filter.$or = orConditions;
       }
 
       const pageNum = Math.max(1, parseInt(page, 10) || 1);
@@ -152,7 +173,18 @@ async function handler(req, res) {
   if (method === 'PUT') {
     try {
       await connectToDatabase();
-      const { id, origin, imageLink, itemRate, boxRate, boxReturnRate, size } = req.body;
+      const {
+        id,
+        origin,
+        imageLink,
+        itemRate,
+        boxRate,
+        boxReturnRate,
+        size,
+        effectiveFromDate,
+        isCorrection = false,
+        note = ''
+      } = req.body;
 
       if (!id) {
         return res.status(400).json({ message: 'Rate record ID is required' });
@@ -164,9 +196,9 @@ async function handler(req, res) {
       }
 
       const oldOrigin = existing.origin;
-      const oldItemRate = existing.itemRate;
-      const oldBoxRate = existing.boxRate;
-      const oldBoxReturnRate = existing.boxReturnRate;
+      const oldItemRate = Number(existing.itemRate) || 0;
+      const oldBoxRate = Number(existing.boxRate) || 0;
+      const oldBoxReturnRate = Number(existing.boxReturnRate) || 0;
 
       if (origin !== undefined) {
         const trimmedOrigin = (origin || '').trim();
@@ -188,10 +220,88 @@ async function handler(req, res) {
       }
 
       if (imageLink !== undefined) existing.imageLink = (imageLink || '').trim();
-      if (itemRate !== undefined) existing.itemRate = Number(itemRate) || 0;
-      if (boxRate !== undefined) existing.boxRate = Number(boxRate) || 0;
-      if (boxReturnRate !== undefined) existing.boxReturnRate = Number(boxReturnRate) || 0;
       if (size !== undefined) existing.size = (size || '').trim();
+
+      const newItemRate = itemRate !== undefined ? (Number(itemRate) || 0) : oldItemRate;
+      const newBoxRate = boxRate !== undefined ? (Number(boxRate) || 0) : oldBoxRate;
+      const newBoxReturnRate = boxReturnRate !== undefined ? (Number(boxReturnRate) || 0) : oldBoxReturnRate;
+
+      const ratesChanged = (newItemRate !== oldItemRate) || (newBoxRate !== oldBoxRate) || (newBoxReturnRate !== oldBoxReturnRate);
+
+      if (ratesChanged) {
+        if (!Array.isArray(existing.rateHistory)) {
+          existing.rateHistory = [];
+        }
+
+        if (isCorrection) {
+          // Correction mode: Update active rate and adjust current history entry without date split
+          if (existing.rateHistory.length > 0) {
+            const activeEntry = existing.rateHistory.find(h => !h.effectiveTo) || existing.rateHistory[existing.rateHistory.length - 1];
+            activeEntry.itemRate = newItemRate;
+            activeEntry.boxRate = newBoxRate;
+            activeEntry.boxReturnRate = newBoxReturnRate;
+            activeEntry.changedAt = new Date();
+            activeEntry.changedByName = user.name || user.username || 'User';
+            if (note) activeEntry.note = note;
+          } else {
+            existing.rateHistory.push({
+              effectiveFrom: existing.createdAt || new Date('2020-01-01'),
+              effectiveTo: null,
+              itemRate: newItemRate,
+              boxRate: newBoxRate,
+              boxReturnRate: newBoxReturnRate,
+              changedAt: new Date(),
+              changedByName: user.name || user.username || 'User',
+              note: note || 'Rate correction'
+            });
+          }
+        } else {
+          // Date-effective mode: preserve past rate for prior dates
+          const effectiveDate = effectiveFromDate ? new Date(effectiveFromDate) : new Date();
+          effectiveDate.setHours(0, 0, 0, 0);
+
+          const dayBefore = new Date(effectiveDate);
+          dayBefore.setDate(dayBefore.getDate() - 1);
+          dayBefore.setHours(23, 59, 59, 999);
+
+          if (existing.rateHistory.length === 0) {
+            // Seed the historical rate before effectiveDate
+            existing.rateHistory.push({
+              effectiveFrom: existing.createdAt || new Date('2020-01-01'),
+              effectiveTo: dayBefore,
+              itemRate: oldItemRate,
+              boxRate: oldBoxRate,
+              boxReturnRate: oldBoxReturnRate,
+              changedAt: existing.createdAt || new Date(),
+              changedByName: existing.lastModifiedByName || 'System',
+              note: 'Prior rate before date-effective revision'
+            });
+          } else {
+            // Close any active or overlapping entries
+            for (const entry of existing.rateHistory) {
+              if (!entry.effectiveTo || new Date(entry.effectiveTo) >= effectiveDate) {
+                entry.effectiveTo = dayBefore;
+              }
+            }
+          }
+
+          // Push the new active rate entry starting from effectiveDate
+          existing.rateHistory.push({
+            effectiveFrom: effectiveDate,
+            effectiveTo: null,
+            itemRate: newItemRate,
+            boxRate: newBoxRate,
+            boxReturnRate: newBoxReturnRate,
+            changedAt: new Date(),
+            changedByName: user.name || user.username || 'User',
+            note: note || `Rate effective from ${effectiveDate.toISOString().split('T')[0]}`
+          });
+        }
+
+        existing.itemRate = newItemRate;
+        existing.boxRate = newBoxRate;
+        existing.boxReturnRate = newBoxReturnRate;
+      }
 
       existing.lastModifiedBy = user._id;
       existing.lastModifiedByName = user.name || user.username || 'User';
@@ -201,13 +311,15 @@ async function handler(req, res) {
       await MasterRateHistory.create({
         company: companyId,
         action: 'EDIT',
-        description: `Updated Origin "${existing.origin}" (Rates: ₹${existing.itemRate} / Box: ₹${existing.boxRate})`,
+        description: `Updated Origin "${existing.origin}" (Rates: ₹${existing.itemRate} / Box: ₹${existing.boxRate}) [${isCorrection ? 'Correction' : 'Date-Effective'}]`,
         details: {
           rateId: existing._id,
           oldOrigin,
           newOrigin: existing.origin,
           oldRates: { item: oldItemRate, box: oldBoxRate, return: oldBoxReturnRate },
-          newRates: { item: existing.itemRate, box: existing.boxRate, return: existing.boxReturnRate }
+          newRates: { item: existing.itemRate, box: existing.boxRate, return: existing.boxReturnRate },
+          isCorrection,
+          effectiveFromDate: isCorrection ? 'All Dates' : (effectiveFromDate || new Date().toISOString().split('T')[0])
         },
         performedBy: user._id,
         performedByName: user.name || user.username || 'User'

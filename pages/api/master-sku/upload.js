@@ -125,7 +125,7 @@ async function handler(req, res) {
       const replaceDesc = recordedPrevCount > 0 ? ` (replaced ${recordedPrevCount} previous SKUs)` : '';
       const description = `Uploaded Master File${fileLabel} with ${allSkus.length} SKUs${replaceDesc}`;
 
-      await MasterSkuHistory.create({
+      const historyDoc = await MasterSkuHistory.create({
         company: companyObjectId,
         action: 'UPLOAD',
         description,
@@ -138,6 +138,8 @@ async function handler(req, res) {
         performedBy: userObjectId,
         performedByName: user.name || user.username || 'User'
       });
+
+      await MasterSkuSnapshot.updateOne({ _id: snapshot._id }, { historyId: historyDoc._id });
 
       const [updatedHistory, updatedUploadHistory] = await Promise.all([
         MasterSkuHistory.find({ company: companyObjectId })

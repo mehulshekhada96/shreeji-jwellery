@@ -88,10 +88,16 @@ export default function MasterRateManager({ onMasterRatesUpdated, initialSearch 
   const [showRestoreModal, setShowRestoreModal] = useState(false);
   const [restoringItem, setRestoringItem] = useState(null);
 
+  // Rate Revision / Date-effective state
+  const [rateEffectiveFromDate, setRateEffectiveFromDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [isRateCorrection, setIsRateCorrection] = useState(false);
+  const [showRateHistoryAccordion, setShowRateHistoryAccordion] = useState(false);
+
   // Delete File / Snapshot state
   const [showDeleteFileModal, setShowDeleteFileModal] = useState(false);
   const [deletingFileItem, setDeletingFileItem] = useState(null);
   const [deletingFile, setDeletingFile] = useState(false);
+  const [deleteActiveRatesOption, setDeleteActiveRatesOption] = useState(false);
 
   // Delete Whole Current Active Master Rate File state
   const [showDeleteCurrentFileModal, setShowDeleteCurrentFileModal] = useState(false);
@@ -107,6 +113,15 @@ export default function MasterRateManager({ onMasterRatesUpdated, initialSearch 
   const [uploadProgress, setUploadProgress] = useState(null);
   const [showUploadConfirm, setShowUploadConfirm] = useState(false);
   const fileInputRef = useRef(null);
+
+  // Diff & Selective Approval states
+  const [analyzingDiff, setAnalyzingDiff] = useState(false);
+  const [showDiffModal, setShowDiffModal] = useState(false);
+  const [diffResult, setDiffResult] = useState(null);
+  const [selectedDiffKeys, setSelectedDiffKeys] = useState(new Set());
+  const [diffFilterTab, setDiffFilterTab] = useState('all'); // 'all' | 'add' | 'edit' | 'unchanged'
+  const [diffSearchQuery, setDiffSearchQuery] = useState('');
+  const [applyingDiff, setApplyingDiff] = useState(false);
 
   // Validation & Error Resolution state
   const [showValidationModal, setShowValidationModal] = useState(false);
@@ -397,9 +412,9 @@ export default function MasterRateManager({ onMasterRatesUpdated, initialSearch 
         setValidationFilter('errors');
         setShowValidationModal(true);
       } else {
-        // All good, prepare parsed data for upload confirmation
+        // All good, prepare parsed data and run diff comparison
         const cleanItems = deduplicateCleanRows(validated);
-        setParsedData({
+        const meta = {
           fileName: file.name,
           totalRows: cleanItems.length,
           originKey,
@@ -409,8 +424,9 @@ export default function MasterRateManager({ onMasterRatesUpdated, initialSearch 
           boxReturnRateKey: boxReturnRateKey || 'Not detected',
           sizeKey: sizeKey || 'Not detected',
           items: cleanItems
-        });
-        setShowUploadConfirm(true);
+        };
+        setParsedData(meta);
+        await runRateDiff(cleanItems, meta);
       }
     } catch (err) {
       console.error('Error reading master rate file:', err);
@@ -609,14 +625,14 @@ export default function MasterRateManager({ onMasterRatesUpdated, initialSearch 
   };
 
   // Proceed with valid rows after resolving errors
-  const proceedWithValidRows = () => {
+  const proceedWithValidRows = async () => {
     const cleanItems = deduplicateCleanRows(validationRows);
     if (cleanItems.length === 0) {
       toast.error('No valid rows available to upload. Please fix or keep at least one valid row.');
       return;
     }
 
-    setParsedData({
+    const meta = {
       fileName: uploadFile?.name || 'master_rate_file.xlsx',
       totalRows: cleanItems.length,
       originKey: 'Origin',
@@ -624,93 +640,119 @@ export default function MasterRateManager({ onMasterRatesUpdated, initialSearch 
       itemRateKey: 'Item Rate',
       boxRateKey: 'Box Rate',
       boxReturnRateKey: 'Box Return Rate',
+      sizeKey: 'Size',
       items: cleanItems
-    });
-
+    };
+    setParsedData(meta);
     setShowValidationModal(false);
-    setShowUploadConfirm(true);
+    await runRateDiff(cleanItems, meta);
   };
 
-  // Perform chunked upload
-  const confirmUpload = async () => {
-    if (!parsedData || !parsedData.items) return;
-
-    setUploading(true);
-    setUploadProgress({
-      currentChunk: 0,
-      totalChunks: 1,
-      processedItems: 0,
-      totalItems: parsedData.items.length,
-      percent: 0
-    });
-
+  // Run diff analysis against current database Rates
+  const runRateDiff = async (cleanItems, meta) => {
+    setAnalyzingDiff(true);
     try {
       const token = localStorage.getItem('token');
-      const CHUNK_SIZE = 5000;
-      const itemsToUpload = parsedData.items;
-      const totalItems = itemsToUpload.length;
-      const totalChunks = Math.ceil(totalItems / CHUNK_SIZE);
-      let previousCount = 0;
-      let finalResData = null;
+      const res = await axios.post(
+        '/api/master-rate/diff',
+        { items: cleanItems },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
 
-      for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
-        const chunkItems = itemsToUpload.slice(chunkIndex * CHUNK_SIZE, (chunkIndex + 1) * CHUNK_SIZE);
-        const percent = Math.round((chunkIndex / totalChunks) * 100);
+      if (res.data.success) {
+        const { summary, toAdd, toEdit, unchanged } = res.data;
+        setDiffResult({ summary, toAdd, toEdit, unchanged });
 
-        setUploadProgress({
-          currentChunk: chunkIndex + 1,
-          totalChunks,
-          processedItems: Math.min(chunkIndex * CHUNK_SIZE + chunkItems.length, totalItems),
-          totalItems,
-          percent
-        });
+        // By default, select all additions and edits
+        const initialSelected = new Set();
+        toAdd.forEach((_, idx) => initialSelected.add(`add_${idx}`));
+        toEdit.forEach((_, idx) => initialSelected.add(`edit_${idx}`));
+        setSelectedDiffKeys(initialSelected);
 
-        const res = await axios.post(
-          '/api/master-rate/upload',
-          {
-            chunkIndex,
-            totalChunks,
-            previousCount,
-            fileName: parsedData.fileName,
-            items: chunkItems
-          },
-          { headers: { Authorization: `Bearer ${token}` } }
-        );
-
-        if (res.data.previousCount !== undefined) {
-          previousCount = res.data.previousCount;
-        }
-
-        if (chunkIndex === totalChunks - 1) {
-          finalResData = res.data;
-        }
+        setDiffFilterTab(toAdd.length > 0 || toEdit.length > 0 ? 'all' : 'unchanged');
+        setDiffSearchQuery('');
+        setShowDiffModal(true);
       }
+    } catch (err) {
+      console.error('Rate diff analysis failed:', err);
+      toast.error(err.response?.data?.message || err.message || 'Failed to compare file with database');
+      setUploadFile(null);
+      setParsedData(null);
+    } finally {
+      setAnalyzingDiff(false);
+    }
+  };
 
-      setUploadProgress({
-        currentChunk: totalChunks,
-        totalChunks,
-        processedItems: totalItems,
-        totalItems,
-        percent: 100
-      });
+  // Apply approved additions and edits without deleting any existing records
+  const applyRateApproval = async () => {
+    if (!diffResult || !parsedData) return;
 
-      if (finalResData && finalResData.success) {
-        toast.success(finalResData.message || 'Master rates uploaded successfully!');
-        if (finalResData.history) setHistory(finalResData.history);
-        if (finalResData.uploadHistory) setUploadHistory(finalResData.uploadHistory);
-        setShowUploadConfirm(false);
-        setUploadFile(null);
+    const { toAdd, toEdit } = diffResult;
+    const approvedItems = [];
+
+    toAdd.forEach((item, idx) => {
+      if (selectedDiffKeys.has(`add_${idx}`)) {
+        approvedItems.push({
+          type: 'add',
+          origin: item.origin,
+          itemRate: item.itemRate,
+          boxRate: item.boxRate,
+          boxReturnRate: item.boxReturnRate,
+          size: item.size,
+          imageLink: item.imageLink
+        });
+      }
+    });
+
+    toEdit.forEach((item, idx) => {
+      if (selectedDiffKeys.has(`edit_${idx}`)) {
+        approvedItems.push({
+          type: 'edit',
+          origin: item.origin,
+          itemRate: item.itemRate,
+          boxRate: item.boxRate,
+          boxReturnRate: item.boxReturnRate,
+          size: item.size,
+          imageLink: item.imageLink,
+          oldValues: item.oldValues,
+          newValues: item.newValues
+        });
+      }
+    });
+
+    if (approvedItems.length === 0) {
+      toast.warning('No items selected. Please select at least one addition or update to save.');
+      return;
+    }
+
+    setApplyingDiff(true);
+    try {
+      const token = localStorage.getItem('token');
+      const res = await axios.post(
+        '/api/master-rate/upsert',
+        {
+          approvedItems,
+          fileName: parsedData.fileName
+        },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+
+      if (res.data.success) {
+        toast.success(res.data.message || `Successfully updated ${approvedItems.length} rates!`);
+        if (res.data.history) setHistory(res.data.history);
+        setShowDiffModal(false);
+        setDiffResult(null);
         setParsedData(null);
+        setUploadFile(null);
         if (fileInputRef.current) fileInputRef.current.value = '';
         fetchRates(1, '', 'origin', 'asc', true);
         onMasterRatesUpdated?.();
       }
     } catch (err) {
-      console.error('Error saving master rates:', err);
-      toast.error(err.response?.data?.message || err.message || 'Failed to save master rate file');
+      console.error('Error applying approved rates:', err);
+      toast.error(err.response?.data?.message || err.message || 'Failed to save approved rates');
     } finally {
-      setUploading(false);
-      setUploadProgress(null);
+      setApplyingDiff(false);
     }
   };
 
@@ -764,6 +806,9 @@ export default function MasterRateManager({ onMasterRatesUpdated, initialSearch 
       boxReturnRate: item.boxReturnRate != null ? item.boxReturnRate : '',
       size: item.size || ''
     });
+    setRateEffectiveFromDate(new Date().toISOString().split('T')[0]);
+    setIsRateCorrection(false);
+    setShowRateHistoryAccordion(false);
     setShowEditModal(true);
   };
 
@@ -786,7 +831,9 @@ export default function MasterRateManager({ onMasterRatesUpdated, initialSearch 
           itemRate: Number(formData.itemRate) || 0,
           boxRate: Number(formData.boxRate) || 0,
           boxReturnRate: Number(formData.boxReturnRate) || 0,
-          size: (formData.size || '').trim()
+          size: (formData.size || '').trim(),
+          effectiveFromDate: rateEffectiveFromDate,
+          isCorrection: isRateCorrection
         },
         { headers: { Authorization: `Bearer ${token}` } }
       );
@@ -931,7 +978,10 @@ export default function MasterRateManager({ onMasterRatesUpdated, initialSearch 
       const token = localStorage.getItem('token');
       const res = await axios.post(
         '/api/master-rate/snapshot',
-        { historyId: restoringItem._id },
+        {
+          historyId: restoringItem._id,
+          snapshotId: restoringItem.details?.snapshotId || restoringItem.snapshotId
+        },
         { headers: { Authorization: `Bearer ${token}` } }
       );
 
@@ -939,6 +989,8 @@ export default function MasterRateManager({ onMasterRatesUpdated, initialSearch 
         toast.success(res.data.message || 'Master rate file restored!');
         setShowRestoreModal(false);
         setRestoringItem(null);
+        if (res.data.history) setHistory(res.data.history);
+        if (res.data.uploadHistory) setUploadHistory(res.data.uploadHistory);
         fetchRates(1, '', 'origin', 'asc', true);
         onMasterRatesUpdated?.();
       }
@@ -947,6 +999,52 @@ export default function MasterRateManager({ onMasterRatesUpdated, initialSearch 
       toast.error(err.response?.data?.message || 'Failed to restore backup');
     } finally {
       setRestoringSnapshot(false);
+    }
+  };
+
+  // Open Delete File Record Confirmation Modal
+  const handleOpenDeleteFileModal = (historyItem) => {
+    setDeletingFileItem(historyItem);
+    const isLatest = uploadHistory[0]?._id === historyItem._id;
+    setDeleteActiveRatesOption(isLatest);
+    setShowDeleteFileModal(true);
+  };
+
+  // Confirm and Execute Delete of File Record and its Snapshot
+  const confirmDeleteFile = async () => {
+    if (!deletingFileItem) return;
+
+    setDeletingFile(true);
+    try {
+      const token = localStorage.getItem('token');
+      const url = `/api/master-rate/snapshot?historyId=${deletingFileItem._id}${deleteActiveRatesOption ? '&deleteActiveRates=true' : ''}`;
+      const res = await axios.delete(url, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+
+      if (res.data.success) {
+        toast.success(res.data.message || 'File record deleted successfully');
+        setShowDeleteFileModal(false);
+        setDeletingFileItem(null);
+        if (selectedHistoryItem?._id === deletingFileItem._id) {
+          setSelectedHistoryItem(null);
+        }
+        if (deleteActiveRatesOption) {
+          setItems([]);
+          setTotalCount(0);
+          setTotalWithImage(0);
+          setPage(1);
+          setHasMore(false);
+          onMasterRatesUpdated?.();
+        }
+        if (res.data.history) setHistory(res.data.history);
+        if (res.data.uploadHistory) setUploadHistory(res.data.uploadHistory);
+      }
+    } catch (err) {
+      console.error('File delete error:', err);
+      toast.error(err.response?.data?.message || 'Failed to delete file record');
+    } finally {
+      setDeletingFile(false);
     }
   };
 
@@ -1075,9 +1173,19 @@ export default function MasterRateManager({ onMasterRatesUpdated, initialSearch 
                       <span className="bg-emerald-600 text-white text-[11px] font-bold px-2 py-0.5 rounded-full">
                         #{index + 1} {index === 0 && '• Latest'}
                       </span>
-                      <span className="text-xs text-gray-500 font-medium" title={moment(item.createdAt).format('LLLL')}>
-                        {moment(item.createdAt).fromNow()}
-                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs text-gray-500 font-medium" title={moment(item.createdAt).format('LLLL')}>
+                          {moment(item.createdAt).fromNow()}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => handleOpenDeleteFileModal(item)}
+                          title="Delete this history / snapshot record"
+                          className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-md transition cursor-pointer"
+                        >
+                          <FaTrash className="w-3 h-3" />
+                        </button>
+                      </div>
                     </div>
 
                     <div className="flex items-center gap-2 mb-2">
@@ -1113,17 +1221,29 @@ export default function MasterRateManager({ onMasterRatesUpdated, initialSearch 
                         <span>Download Backup</span>
                       </button>
 
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setRestoringItem(item);
-                          setShowRestoreModal(true);
-                        }}
-                        className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-800 font-semibold cursor-pointer"
-                      >
-                        <FaUndo className="w-3 h-3" />
-                        <span>Restore</span>
-                      </button>
+                      <div className="flex items-center gap-3">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setRestoringItem(item);
+                            setShowRestoreModal(true);
+                          }}
+                          className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-800 font-semibold cursor-pointer"
+                        >
+                          <FaUndo className="w-3 h-3" />
+                          <span>Restore</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => handleOpenDeleteFileModal(item)}
+                          className="inline-flex items-center gap-1 text-red-500 hover:text-red-700 font-semibold cursor-pointer"
+                          title="Delete snapshot & history"
+                        >
+                          <FaTrash className="w-3 h-3" />
+                          <span>Delete</span>
+                        </button>
+                      </div>
                     </div>
                   </div>
                 );
@@ -1645,13 +1765,18 @@ export default function MasterRateManager({ onMasterRatesUpdated, initialSearch 
                             />
                           </td>
                           <td className="px-3 py-2">
-                            <input
-                              type="text"
+                            <select
                               value={r.size || ''}
                               onChange={(e) => handleInlineEditRow(r.id, 'size', e.target.value)}
-                              placeholder="Size"
-                              className="w-full px-2 py-1 text-xs border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                            />
+                              className="w-full px-2 py-1 text-xs border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-emerald-500 bg-white"
+                            >
+                              <option value="">—</option>
+                              <option value="Large">Large</option>
+                              <option value="Small">Small</option>
+                              {r.size && !['Large', 'Small'].includes(r.size) && (
+                                <option value={r.size}>{r.size}</option>
+                              )}
+                            </select>
                           </td>
                           <td className="px-4 py-2">
                             {r.errors.length > 0 ? (
@@ -1713,82 +1838,504 @@ export default function MasterRateManager({ onMasterRatesUpdated, initialSearch 
         </div>
       )}
 
-      {/* Upload Confirmation Modal */}
-      {showUploadConfirm && parsedData && (
+      {/* Analyzing Diff Spinner Modal */}
+      {analyzingDiff && (
         <div className="fixed inset-0 z-50 overflow-y-auto bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-6 space-y-4 animate-in fade-in zoom-in-95">
-            <div className="flex items-center gap-3">
-              <div className="p-3 bg-emerald-100 rounded-full text-emerald-600">
-                <FaFileExcel className="w-6 h-6" />
-              </div>
-              <div>
-                <h3 className="text-lg font-bold text-gray-900">Confirm Master Rate Upload</h3>
-                <p className="text-xs text-gray-500">Replace current master rate catalog with uploaded file</p>
-              </div>
+          <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-6 text-center space-y-3 animate-in fade-in">
+            <div className="w-12 h-12 bg-emerald-100 rounded-full flex items-center justify-center mx-auto text-emerald-600">
+              <FaSync className="animate-spin w-6 h-6" />
             </div>
+            <h3 className="font-bold text-gray-900 text-base">Comparing Rates with Database...</h3>
+            <p className="text-xs text-gray-500 leading-relaxed">
+              Detecting newly added origins and price/box rate changes against your existing catalog. No records will be deleted.
+            </p>
+          </div>
+        </div>
+      )}
 
-            <div className="p-4 bg-emerald-50/60 border border-emerald-200/80 rounded-xl space-y-2 text-xs">
-              <div className="flex justify-between">
-                <span className="text-gray-500">File Name:</span>
-                <span className="font-semibold text-gray-800 truncate max-w-[200px]">{parsedData.fileName}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-500">Total Valid Origins:</span>
-                <strong className="text-emerald-700 font-mono text-sm">{parsedData.totalRows.toLocaleString()}</strong>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-500">Current Catalog in DB:</span>
-                <span className="font-mono text-gray-700">{totalCount.toLocaleString()} origins</span>
-              </div>
-            </div>
-
-            {uploadProgress && (
-              <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg space-y-2">
-                <div className="flex justify-between text-xs text-emerald-900 font-medium">
-                  <span>Uploading batch {uploadProgress.currentChunk} of {uploadProgress.totalChunks}...</span>
-                  <span>
-                    {uploadProgress.processedItems.toLocaleString()} / {uploadProgress.totalItems.toLocaleString()} (
-                    {uploadProgress.percent}%)
-                  </span>
+      {/* Selective Diff & Multi-Select Approval Modal */}
+      {showDiffModal && diffResult && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-4xl w-full p-5 sm:p-6 space-y-4 animate-in fade-in max-h-[92vh] flex flex-col">
+            {/* Header */}
+            <div className="flex items-start justify-between border-b pb-3">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-emerald-100 rounded-xl text-emerald-700">
+                  <FaFileExcel className="w-5 h-5" />
                 </div>
-                <div className="w-full bg-emerald-200 rounded-full h-2 overflow-hidden">
-                  <div
-                    className="bg-emerald-600 h-2 rounded-full transition-all duration-300"
-                    style={{ width: `${uploadProgress.percent}%` }}
-                  />
+                <div>
+                  <h3 className="text-lg font-bold text-gray-900 flex items-center gap-2">
+                    <span>Review & Approve Rate Changes</span>
+                  </h3>
+                  <p className="text-xs text-gray-500">
+                    File: <span className="font-semibold text-gray-700">{parsedData?.fileName}</span> • {parsedData?.totalRows?.toLocaleString()} valid origins in file
+                  </p>
                 </div>
               </div>
-            )}
-
-            <div className="flex items-center justify-end gap-3 pt-2">
               <button
                 type="button"
                 onClick={() => {
-                  setShowUploadConfirm(false);
+                  setShowDiffModal(false);
+                  setDiffResult(null);
                   setParsedData(null);
                   setUploadFile(null);
                   if (fileInputRef.current) fileInputRef.current.value = '';
                 }}
-                disabled={uploading}
+                disabled={applyingDiff}
+                className="p-2 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100 transition"
+              >
+                <FaTimes className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Summary Cards */}
+            <div className="grid grid-cols-3 gap-3">
+              <div
+                onClick={() => setDiffFilterTab('add')}
+                className={`p-3 rounded-xl border transition cursor-pointer ${
+                  diffFilterTab === 'add'
+                    ? 'bg-emerald-50 border-emerald-300 ring-2 ring-emerald-500/20'
+                    : 'bg-emerald-50/50 border-emerald-200/70 hover:bg-emerald-50'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-emerald-800">New to Add</span>
+                  <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-100 font-bold text-emerald-700">
+                    +{diffResult.summary.addCount}
+                  </span>
+                </div>
+                <p className="text-[11px] text-emerald-600 mt-1">New origins not in DB</p>
+              </div>
+
+              <div
+                onClick={() => setDiffFilterTab('edit')}
+                className={`p-3 rounded-xl border transition cursor-pointer ${
+                  diffFilterTab === 'edit'
+                    ? 'bg-amber-50 border-amber-300 ring-2 ring-amber-500/20'
+                    : 'bg-amber-50/50 border-amber-200/70 hover:bg-amber-50'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-amber-800">Edits to Update</span>
+                  <span className="text-xs px-2 py-0.5 rounded-full bg-amber-100 font-bold text-amber-700">
+                    {diffResult.summary.editCount}
+                  </span>
+                </div>
+                <p className="text-[11px] text-amber-600 mt-1">Rates or sizes changed</p>
+              </div>
+
+              <div
+                onClick={() => setDiffFilterTab('unchanged')}
+                className={`p-3 rounded-xl border transition cursor-pointer ${
+                  diffFilterTab === 'unchanged'
+                    ? 'bg-gray-100 border-gray-400 ring-2 ring-gray-400/20'
+                    : 'bg-gray-50 border-gray-200 hover:bg-gray-100/60'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-gray-700">Unchanged</span>
+                  <span className="text-xs px-2 py-0.5 rounded-full bg-gray-200 font-bold text-gray-700">
+                    {diffResult.summary.unchangedCount}
+                  </span>
+                </div>
+                <p className="text-[11px] text-gray-500 mt-1">Already identical in DB</p>
+              </div>
+            </div>
+
+            {/* Quick Actions & Search Toolbar */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pt-1">
+              {/* Filter Tabs */}
+              <div className="flex items-center gap-1 bg-gray-100 p-1 rounded-lg text-xs font-medium">
+                <button
+                  type="button"
+                  onClick={() => setDiffFilterTab('all')}
+                  className={`px-3 py-1 rounded-md transition ${
+                    diffFilterTab === 'all'
+                      ? 'bg-white text-gray-900 shadow-xs font-bold'
+                      : 'text-gray-600 hover:text-gray-900'
+                  }`}
+                >
+                  All Changes ({diffResult.summary.addCount + diffResult.summary.editCount})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDiffFilterTab('add')}
+                  className={`px-3 py-1 rounded-md transition ${
+                    diffFilterTab === 'add'
+                      ? 'bg-white text-emerald-800 shadow-xs font-bold'
+                      : 'text-gray-600 hover:text-emerald-700'
+                  }`}
+                >
+                  New Only ({diffResult.summary.addCount})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDiffFilterTab('edit')}
+                  className={`px-3 py-1 rounded-md transition ${
+                    diffFilterTab === 'edit'
+                      ? 'bg-white text-amber-800 shadow-xs font-bold'
+                      : 'text-gray-600 hover:text-amber-700'
+                  }`}
+                >
+                  Edits Only ({diffResult.summary.editCount})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDiffFilterTab('unchanged')}
+                  className={`px-3 py-1 rounded-md transition ${
+                    diffFilterTab === 'unchanged'
+                      ? 'bg-white text-gray-800 shadow-xs font-bold'
+                      : 'text-gray-500 hover:text-gray-800'
+                  }`}
+                >
+                  Unchanged ({diffResult.summary.unchangedCount})
+                </button>
+              </div>
+
+              {/* Search Bar */}
+              <div className="relative">
+                <FaSearch className="absolute left-2.5 top-2.5 text-gray-400 w-3 h-3" />
+                <input
+                  type="text"
+                  placeholder="Filter by origin..."
+                  value={diffSearchQuery}
+                  onChange={(e) => setDiffSearchQuery(e.target.value)}
+                  className="pl-7 pr-3 py-1 text-xs border border-gray-300 rounded-lg w-full sm:w-44 focus:outline-hidden focus:ring-1 focus:ring-emerald-500"
+                />
+              </div>
+            </div>
+
+            {/* Selection Quick Buttons */}
+            {diffFilterTab !== 'unchanged' && (
+              <div className="flex items-center justify-between text-xs bg-slate-50 border border-slate-200 px-3 py-2 rounded-lg">
+                <div className="flex items-center gap-2">
+                  <span className="font-semibold text-gray-700">Selection:</span>
+                  <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-bold">
+                    {selectedDiffKeys.size} approved
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const allKeys = new Set();
+                      diffResult.toAdd.forEach((_, idx) => allKeys.add(`add_${idx}`));
+                      diffResult.toEdit.forEach((_, idx) => allKeys.add(`edit_${idx}`));
+                      setSelectedDiffKeys(allKeys);
+                    }}
+                    className="text-emerald-700 hover:text-emerald-900 hover:underline font-medium cursor-pointer"
+                  >
+                    Select All Changes
+                  </button>
+                  <span className="text-gray-300">|</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const newKeys = new Set(selectedDiffKeys);
+                      diffResult.toAdd.forEach((_, idx) => newKeys.add(`add_${idx}`));
+                      setSelectedDiffKeys(newKeys);
+                    }}
+                    className="text-emerald-700 hover:text-emerald-900 hover:underline font-medium cursor-pointer"
+                  >
+                    Select All New
+                  </button>
+                  <span className="text-gray-300">|</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const newKeys = new Set(selectedDiffKeys);
+                      diffResult.toEdit.forEach((_, idx) => newKeys.add(`edit_${idx}`));
+                      setSelectedDiffKeys(newKeys);
+                    }}
+                    className="text-amber-700 hover:text-amber-900 hover:underline font-medium cursor-pointer"
+                  >
+                    Select All Edits
+                  </button>
+                  <span className="text-gray-300">|</span>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedDiffKeys(new Set())}
+                    className="text-gray-500 hover:text-gray-700 hover:underline cursor-pointer"
+                  >
+                    Deselect All
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Diff Items Table */}
+            <div className="flex-1 overflow-y-auto border border-gray-200 rounded-xl min-h-[220px] max-h-[360px]">
+              {(() => {
+                const itemsToRender = [];
+                if (diffFilterTab === 'all' || diffFilterTab === 'add') {
+                  diffResult.toAdd.forEach((item, idx) => {
+                    itemsToRender.push({
+                      key: `add_${idx}`,
+                      itemIdx: idx,
+                      type: 'add',
+                      origin: item.origin,
+                      itemRate: item.itemRate,
+                      boxRate: item.boxRate,
+                      boxReturnRate: item.boxReturnRate,
+                      size: item.size,
+                      imageLink: item.imageLink
+                    });
+                  });
+                }
+                if (diffFilterTab === 'all' || diffFilterTab === 'edit') {
+                  diffResult.toEdit.forEach((item, idx) => {
+                    itemsToRender.push({
+                      key: `edit_${idx}`,
+                      itemIdx: idx,
+                      type: 'edit',
+                      origin: item.origin,
+                      itemRate: item.itemRate,
+                      boxRate: item.boxRate,
+                      boxReturnRate: item.boxReturnRate,
+                      size: item.size,
+                      imageLink: item.imageLink,
+                      oldValues: item.oldValues,
+                      newValues: item.newValues,
+                      changes: item.changes
+                    });
+                  });
+                }
+                if (diffFilterTab === 'unchanged') {
+                  diffResult.unchanged.forEach((item, idx) => {
+                    itemsToRender.push({
+                      key: `unchanged_${idx}`,
+                      itemIdx: idx,
+                      type: 'unchanged',
+                      origin: item.origin,
+                      itemRate: item.itemRate,
+                      boxRate: item.boxRate,
+                      boxReturnRate: item.boxReturnRate,
+                      size: item.size,
+                      imageLink: item.imageLink
+                    });
+                  });
+                }
+
+                const filtered = diffSearchQuery.trim()
+                  ? itemsToRender.filter(i =>
+                      i.origin && i.origin.toLowerCase().includes(diffSearchQuery.toLowerCase())
+                    )
+                  : itemsToRender;
+
+                if (filtered.length === 0) {
+                  return (
+                    <div className="p-8 text-center text-gray-500 text-xs">
+                      No items matching this view or search filter.
+                    </div>
+                  );
+                }
+
+                const allFilteredChangableKeys = filtered.filter(i => i.type !== 'unchanged').map(i => i.key);
+                const allSelected = allFilteredChangableKeys.length > 0 && allFilteredChangableKeys.every(k => selectedDiffKeys.has(k));
+
+                return (
+                  <table className="w-full text-xs text-left">
+                    <thead className="bg-gray-50 text-gray-600 font-semibold sticky top-0 z-10 border-b">
+                      <tr>
+                        {diffFilterTab !== 'unchanged' && (
+                          <th className="p-2.5 w-10 text-center">
+                            <input
+                              type="checkbox"
+                              checked={allSelected}
+                              onChange={() => {
+                                const next = new Set(selectedDiffKeys);
+                                if (allSelected) {
+                                  allFilteredChangableKeys.forEach(k => next.delete(k));
+                                } else {
+                                  allFilteredChangableKeys.forEach(k => next.add(k));
+                                }
+                                setSelectedDiffKeys(next);
+                              }}
+                              className="rounded text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                            />
+                          </th>
+                        )}
+                        <th className="p-2.5 w-24">Change</th>
+                        <th className="p-2.5">Origin Item Name</th>
+                        <th className="p-2.5">Item Rate</th>
+                        <th className="p-2.5">Box Rate</th>
+                        <th className="p-2.5">Return Rate</th>
+                        <th className="p-2.5 w-24">Size</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {filtered.map(item => {
+                        const isSelected = selectedDiffKeys.has(item.key);
+                        const isChangable = item.type !== 'unchanged';
+
+                        return (
+                          <tr
+                            key={item.key}
+                            onClick={() => {
+                              if (!isChangable) return;
+                              const next = new Set(selectedDiffKeys);
+                              if (isSelected) next.delete(item.key);
+                              else next.add(item.key);
+                              setSelectedDiffKeys(next);
+                            }}
+                            className={`transition cursor-pointer ${
+                              !isChangable
+                                ? 'bg-gray-50/50 text-gray-500 cursor-default'
+                                : isSelected
+                                ? 'bg-emerald-50/60 hover:bg-emerald-50'
+                                : 'hover:bg-gray-50'
+                            }`}
+                          >
+                            {diffFilterTab !== 'unchanged' && (
+                              <td className="p-2.5 text-center" onClick={(e) => e.stopPropagation()}>
+                                {isChangable ? (
+                                  <input
+                                    type="checkbox"
+                                    checked={isSelected}
+                                    onChange={(e) => {
+                                      const next = new Set(selectedDiffKeys);
+                                      if (e.target.checked) next.add(item.key);
+                                      else next.delete(item.key);
+                                      setSelectedDiffKeys(next);
+                                    }}
+                                    className="rounded text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                                  />
+                                ) : (
+                                  <span className="text-gray-300">—</span>
+                                )}
+                              </td>
+                            )}
+                            <td className="p-2.5">
+                              {item.type === 'add' && (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">
+                                  <FaPlus className="w-2.5 h-2.5" />
+                                  <span>NEW</span>
+                                </span>
+                              )}
+                              {item.type === 'edit' && (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800">
+                                  <FaEdit className="w-2.5 h-2.5" />
+                                  <span>EDIT</span>
+                                </span>
+                              )}
+                              {item.type === 'unchanged' && (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-gray-100 text-gray-600">
+                                  MATCH
+                                </span>
+                              )}
+                            </td>
+                            <td className="p-2.5 font-semibold text-gray-900">{item.origin}</td>
+                            <td className="p-2.5">
+                              {item.type === 'edit' && item.changes?.itemRateChanged ? (
+                                <div className="flex items-center gap-1 flex-wrap font-mono">
+                                  <span className="line-through text-red-500 text-[11px]">
+                                    ₹{item.oldValues?.itemRate}
+                                  </span>
+                                  <span className="text-gray-400">➔</span>
+                                  <span className="font-bold text-emerald-700">
+                                    ₹{item.newValues?.itemRate}
+                                  </span>
+                                </div>
+                              ) : (
+                                <span className="font-mono text-gray-800">₹{item.itemRate}</span>
+                              )}
+                            </td>
+                            <td className="p-2.5">
+                              {item.type === 'edit' && item.changes?.boxRateChanged ? (
+                                <div className="flex items-center gap-1 flex-wrap font-mono">
+                                  <span className="line-through text-red-500 text-[11px]">
+                                    ₹{item.oldValues?.boxRate}
+                                  </span>
+                                  <span className="text-gray-400">➔</span>
+                                  <span className="font-bold text-emerald-700">
+                                    ₹{item.newValues?.boxRate}
+                                  </span>
+                                </div>
+                              ) : (
+                                <span className="font-mono text-gray-800">₹{item.boxRate}</span>
+                              )}
+                            </td>
+                            <td className="p-2.5">
+                              {item.type === 'edit' && item.changes?.boxReturnRateChanged ? (
+                                <div className="flex items-center gap-1 flex-wrap font-mono">
+                                  <span className="line-through text-red-500 text-[11px]">
+                                    ₹{item.oldValues?.boxReturnRate}
+                                  </span>
+                                  <span className="text-gray-400">➔</span>
+                                  <span className="font-bold text-emerald-700">
+                                    ₹{item.newValues?.boxReturnRate}
+                                  </span>
+                                </div>
+                              ) : (
+                                <span className="font-mono text-gray-800">₹{item.boxReturnRate}</span>
+                              )}
+                            </td>
+                            <td className="p-2.5">
+                              {item.type === 'edit' && item.changes?.sizeChanged ? (
+                                <div className="flex items-center gap-1 flex-wrap">
+                                  <span className="line-through text-red-500 text-[11px]">
+                                    {item.oldValues?.size || '(none)'}
+                                  </span>
+                                  <span className="text-gray-400">➔</span>
+                                  <span className="font-semibold text-emerald-700">
+                                    {item.newValues?.size || '(none)'}
+                                  </span>
+                                </div>
+                              ) : (
+                                <span className="text-gray-800">{item.size || '—'}</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                );
+              })()}
+            </div>
+
+            {/* Safety Notice Banner */}
+            <div className="bg-emerald-50 border border-emerald-200/80 rounded-xl p-3 text-xs text-emerald-900 flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <FaCheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>
+                  <strong>Safe Selective Import:</strong> Only selected additions and edits will be applied. Existing catalog rates not in this file will <strong>NEVER</strong> be deleted.
+                </span>
+              </div>
+            </div>
+
+            {/* Footer Actions */}
+            <div className="flex items-center justify-between pt-2 border-t">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowDiffModal(false);
+                  setDiffResult(null);
+                  setParsedData(null);
+                  setUploadFile(null);
+                  if (fileInputRef.current) fileInputRef.current.value = '';
+                }}
+                disabled={applyingDiff}
                 className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm font-semibold hover:bg-gray-100 transition cursor-pointer"
               >
                 Cancel
               </button>
+
               <button
                 type="button"
-                onClick={confirmUpload}
-                disabled={uploading}
-                className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-semibold shadow-md flex items-center gap-2 transition cursor-pointer"
+                onClick={applyRateApproval}
+                disabled={applyingDiff || selectedDiffKeys.size === 0}
+                className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-300 text-white rounded-lg text-sm font-semibold shadow-md flex items-center gap-2 transition cursor-pointer"
               >
-                {uploading ? (
+                {applyingDiff ? (
                   <>
                     <FaSync className="animate-spin w-4 h-4" />
-                    <span>{uploadProgress ? `Syncing (${uploadProgress.percent}%)` : 'Processing...'}</span>
+                    <span>Applying Changes...</span>
                   </>
                 ) : (
                   <>
                     <FaCheckCircle className="w-4 h-4" />
-                    <span>Confirm &amp; Replace</span>
+                    <span>Approve & Save ({selectedDiffKeys.size} Selected)</span>
                   </>
                 )}
               </button>
@@ -1833,13 +2380,18 @@ export default function MasterRateManager({ onMasterRatesUpdated, initialSearch 
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-gray-700 mb-1">Size</label>
-                  <input
-                    type="text"
-                    value={formData.size}
+                  <select
+                    value={formData.size || ''}
                     onChange={(e) => setFormData(prev => ({ ...prev, size: e.target.value }))}
-                    placeholder="e.g., Large, Small..."
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
-                  />
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none bg-white font-medium"
+                  >
+                    <option value="">Select Size</option>
+                    <option value="Large">Large</option>
+                    <option value="Small">Small</option>
+                    {formData.size && !['Large', 'Small'].includes(formData.size) && (
+                      <option value={formData.size}>{formData.size}</option>
+                    )}
+                  </select>
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-gray-700 mb-1">Rate (₹)</label>
@@ -1950,13 +2502,18 @@ export default function MasterRateManager({ onMasterRatesUpdated, initialSearch 
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-gray-700 mb-1">Size</label>
-                  <input
-                    type="text"
-                    value={formData.size}
+                  <select
+                    value={formData.size || ''}
                     onChange={(e) => setFormData(prev => ({ ...prev, size: e.target.value }))}
-                    placeholder="e.g., Large, Small..."
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
-                  />
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none bg-white font-medium"
+                  >
+                    <option value="">Select Size</option>
+                    <option value="Large">Large</option>
+                    <option value="Small">Small</option>
+                    {formData.size && !['Large', 'Small'].includes(formData.size) && (
+                      <option value={formData.size}>{formData.size}</option>
+                    )}
+                  </select>
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-gray-700 mb-1">Rate (₹)</label>
@@ -2006,6 +2563,108 @@ export default function MasterRateManager({ onMasterRatesUpdated, initialSearch 
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
                 />
               </div>
+
+              {/* Rate Revision Section - shows when rates differ */}
+              {(Number(formData.itemRate || 0) !== Number(editingItem.itemRate || 0) ||
+                Number(formData.boxRate || 0) !== Number(editingItem.boxRate || 0) ||
+                Number(formData.boxReturnRate || 0) !== Number(editingItem.boxReturnRate || 0)) && (
+                <div className="bg-emerald-50/80 border border-emerald-200 rounded-xl p-3.5 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-900">
+                      <FaCalendarAlt className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>Rate Revision Schedule</span>
+                    </div>
+                    <span className="text-[11px] font-semibold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-full">
+                      Date-Effective
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <label className={`flex items-start gap-2 p-2.5 rounded-lg border cursor-pointer transition ${
+                      !isRateCorrection ? 'bg-white border-emerald-500 shadow-xs' : 'bg-transparent border-emerald-200 opacity-75'
+                    }`}>
+                      <input
+                        type="radio"
+                        name="rateUpdateType"
+                        checked={!isRateCorrection}
+                        onChange={() => setIsRateCorrection(false)}
+                        className="mt-0.5 text-emerald-600 focus:ring-emerald-500"
+                      />
+                      <div>
+                        <span className="font-bold text-gray-900 block">From specific date</span>
+                        <span className="text-[10px] text-gray-500 block">Past orders keep old rate (₹{editingItem.itemRate || 0})</span>
+                      </div>
+                    </label>
+
+                    <label className={`flex items-start gap-2 p-2.5 rounded-lg border cursor-pointer transition ${
+                      isRateCorrection ? 'bg-white border-emerald-500 shadow-xs' : 'bg-transparent border-emerald-200 opacity-75'
+                    }`}>
+                      <input
+                        type="radio"
+                        name="rateUpdateType"
+                        checked={isRateCorrection}
+                        onChange={() => setIsRateCorrection(true)}
+                        className="mt-0.5 text-emerald-600 focus:ring-emerald-500"
+                      />
+                      <div>
+                        <span className="font-bold text-gray-900 block">All dates (Correction)</span>
+                        <span className="text-[10px] text-gray-500 block">Fixes typo across all historical orders</span>
+                      </div>
+                    </label>
+                  </div>
+
+                  {!isRateCorrection && (
+                    <div className="pt-1">
+                      <label className="block text-[11px] font-bold text-emerald-900 mb-1">
+                        Effective Starting From Date:
+                      </label>
+                      <input
+                        type="date"
+                        value={rateEffectiveFromDate}
+                        onChange={(e) => setRateEffectiveFromDate(e.target.value)}
+                        className="w-full px-3 py-1.5 border border-emerald-300 rounded-lg text-xs bg-white font-medium focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                      />
+                      <p className="text-[10px] text-emerald-800 mt-1">
+                        ℹ️ Orders before {rateEffectiveFromDate} will retain previous rate of ₹{editingItem.itemRate || 0} + ₹{editingItem.boxRate || 0}.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Historical Rates accordion if previous rates exist */}
+              {Array.isArray(editingItem.rateHistory) && editingItem.rateHistory.length > 0 && (
+                <div className="border border-gray-200 rounded-xl overflow-hidden text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setShowRateHistoryAccordion(prev => !prev)}
+                    className="w-full px-3 py-2 bg-gray-50 hover:bg-gray-100 flex items-center justify-between font-semibold text-gray-700 transition"
+                  >
+                    <span>Rate History ({editingItem.rateHistory.length} revisions)</span>
+                    <span className="text-gray-400">{showRateHistoryAccordion ? '▲' : '▼'}</span>
+                  </button>
+                  {showRateHistoryAccordion && (
+                    <div className="p-3 bg-white space-y-2 max-h-40 overflow-y-auto">
+                      {editingItem.rateHistory.map((h, idx) => {
+                        const fromStr = h.effectiveFrom ? new Date(h.effectiveFrom).toLocaleDateString('en-GB') : 'Inception';
+                        const toStr = h.effectiveTo ? new Date(h.effectiveTo).toLocaleDateString('en-GB') : 'Current';
+                        return (
+                          <div key={idx} className="flex items-center justify-between p-2 rounded-lg bg-gray-50 border border-gray-100 text-[11px]">
+                            <div>
+                              <span className="font-bold text-gray-900">₹{h.itemRate || 0}</span>
+                              <span className="text-gray-500 ml-1">(Dabbi: ₹{h.boxRate || 0}, Ret: ₹{h.boxReturnRate || 0})</span>
+                            </div>
+                            <div className="text-right">
+                              <span className="font-mono text-gray-600 block">{fromStr} → {toStr}</span>
+                              {h.note && <span className="text-[10px] text-gray-400 block">{h.note}</span>}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div className="flex items-center justify-end gap-3 pt-3 border-t border-gray-100">
                 <button
@@ -2113,6 +2772,95 @@ export default function MasterRateManager({ onMasterRatesUpdated, initialSearch 
                   <>
                     <FaTrash className="w-3.5 h-3.5" />
                     <span>Yes, Delete Whole File</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete File Record Confirmation Modal */}
+      {showDeleteFileModal && deletingFileItem && (
+        <div className="fixed inset-0 z-[60] overflow-y-auto bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 space-y-4 animate-in fade-in zoom-in-95">
+            <div className="flex items-center gap-3">
+              <div className="p-3 bg-red-100 rounded-full text-red-600">
+                <FaTrash className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-gray-900">Delete Rate File Record</h3>
+                <p className="text-xs text-gray-500">Remove this upload entry and its backup snapshot</p>
+              </div>
+            </div>
+
+            <div className="p-4 bg-red-50/70 border border-red-200/80 rounded-xl space-y-2 text-xs text-red-950">
+              <div className="flex items-center gap-2">
+                <FaFileExcel className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+                <span className="font-bold text-sm text-gray-900 truncate">
+                  {deletingFileItem.details?.fileName || 'master_rate_file.xlsx'}
+                </span>
+              </div>
+              <div className="grid grid-cols-2 gap-2 pt-2 border-t border-red-200/60">
+                <div>
+                  <span className="text-gray-500 block">Total Origins:</span>
+                  <strong className="font-mono text-gray-900">
+                    {(deletingFileItem.details?.totalCount || totalCount).toLocaleString()} Origins
+                  </strong>
+                </div>
+                <div>
+                  <span className="text-gray-500 block">Uploaded By:</span>
+                  <strong className="text-gray-900">{deletingFileItem.performedByName || 'User'}</strong>
+                </div>
+              </div>
+            </div>
+
+            <p className="text-xs text-gray-600 leading-relaxed">
+              Are you sure you want to delete this upload history entry? This will permanently remove the record and its backup snapshot.
+            </p>
+
+            {uploadHistory[0]?._id === deletingFileItem._id && (
+              <label className="flex items-start gap-2.5 p-3 bg-red-50 hover:bg-red-100/70 rounded-xl border border-red-200 cursor-pointer text-xs text-red-950 select-none transition">
+                <input
+                  type="checkbox"
+                  checked={deleteActiveRatesOption}
+                  onChange={(e) => setDeleteActiveRatesOption(e.target.checked)}
+                  className="mt-0.5 rounded border-red-300 text-red-600 focus:ring-red-500"
+                />
+                <div>
+                  <strong className="block font-bold">Also delete all {totalCount.toLocaleString()} active Master Rates</strong>
+                  <span className="text-[11px] text-red-700">Wipes current active rates from the database and reverts to clean slate.</span>
+                </div>
+              </label>
+            )}
+
+            <div className="flex items-center justify-end gap-3 pt-3 border-t border-gray-100">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowDeleteFileModal(false);
+                  setDeletingFileItem(null);
+                }}
+                disabled={deletingFile}
+                className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg text-xs font-semibold hover:bg-gray-100 transition cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmDeleteFile}
+                disabled={deletingFile}
+                className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-xs font-bold shadow-md flex items-center gap-2 transition cursor-pointer"
+              >
+                {deletingFile ? (
+                  <>
+                    <FaSync className="animate-spin w-3.5 h-3.5" />
+                    <span>Deleting...</span>
+                  </>
+                ) : (
+                  <>
+                    <FaTrash className="w-3.5 h-3.5" />
+                    <span>Yes, Delete Record</span>
                   </>
                 )}
               </button>

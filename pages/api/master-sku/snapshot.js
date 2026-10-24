@@ -26,6 +26,98 @@ const gzipAsync = (data) =>
     zlib.gzip(data, (err, res) => (err ? reject(err) : resolve(res)));
   });
 
+async function findOrReconstructSkuSnapshot({ snapshotId, historyId, companyObjectId, userObjectId, userName }) {
+  let snapshot = null;
+  let historyItem = null;
+
+  if (historyId && mongoose.isValidObjectId(historyId)) {
+    historyItem = await MasterSkuHistory.findOne({ _id: historyId, company: companyObjectId });
+  }
+
+  // 1. Direct snapshotId lookup
+  if (snapshotId && mongoose.isValidObjectId(snapshotId)) {
+    snapshot = await MasterSkuSnapshot.findOne({ _id: snapshotId, company: companyObjectId });
+  }
+
+  // 2. Lookup via history.details.snapshotId
+  if (!snapshot && historyItem?.details?.snapshotId && mongoose.isValidObjectId(historyItem.details.snapshotId)) {
+    snapshot = await MasterSkuSnapshot.findOne({ _id: historyItem.details.snapshotId, company: companyObjectId });
+  }
+
+  // 3. Lookup by historyId field on MasterSkuSnapshot
+  if (!snapshot && historyId && mongoose.isValidObjectId(historyId)) {
+    snapshot = await MasterSkuSnapshot.findOne({ historyId: new mongoose.Types.ObjectId(historyId), company: companyObjectId });
+  }
+
+  // 4. In case historyId was actually a MasterSkuSnapshot _id
+  if (!snapshot && historyId && mongoose.isValidObjectId(historyId)) {
+    snapshot = await MasterSkuSnapshot.findOne({ _id: historyId, company: companyObjectId });
+  }
+
+  // 5. Lookup by fileName from history details
+  if (!snapshot && historyItem?.details?.fileName) {
+    snapshot = await MasterSkuSnapshot.findOne({
+      company: companyObjectId,
+      fileName: historyItem.details.fileName
+    }).sort({ createdAt: -1 });
+  }
+
+  // 6. Lookup snapshot created around the history entry timestamp (+/- 15 minutes)
+  if (!snapshot && historyItem?.createdAt) {
+    const histTime = new Date(historyItem.createdAt).getTime();
+    snapshot = await MasterSkuSnapshot.findOne({
+      company: companyObjectId,
+      createdAt: {
+        $gte: new Date(histTime - 15 * 60 * 1000),
+        $lte: new Date(histTime + 15 * 60 * 1000)
+      }
+    }).sort({ createdAt: -1 });
+  }
+
+  // 7. Fallback to the latest snapshot recorded for this company
+  if (!snapshot) {
+    snapshot = await MasterSkuSnapshot.findOne({ company: companyObjectId }).sort({ createdAt: -1 });
+  }
+
+  // 8. If snapshot exists and historyItem exists, heal the link!
+  if (snapshot && historyItem) {
+    if (!historyItem.details?.snapshotId || String(historyItem.details.snapshotId) !== String(snapshot._id)) {
+      await MasterSkuHistory.updateOne({ _id: historyItem._id }, { 'details.snapshotId': snapshot._id });
+    }
+    if (!snapshot.historyId) {
+      await MasterSkuSnapshot.updateOne({ _id: snapshot._id }, { historyId: historyItem._id });
+    }
+  }
+
+  // 9. If no snapshot exists in DB at all, but active SKUs exist, create a new snapshot on the fly!
+  if (!snapshot) {
+    const activeItems = await MasterSku.find({ company: companyObjectId })
+      .select('sku origin size')
+      .lean();
+
+    if (activeItems.length > 0) {
+      const fileName = historyItem?.details?.fileName || 'master_sku_snapshot.xlsx';
+      const snapshotItems = activeItems.map(i => ({ sku: i.sku, origin: i.origin || '', size: i.size || '' }));
+      const compressedBuffer = await gzipAsync(Buffer.from(JSON.stringify(snapshotItems)));
+      snapshot = await MasterSkuSnapshot.create({
+        company: companyObjectId,
+        historyId: historyItem?._id,
+        fileName,
+        totalCount: activeItems.length,
+        compressedData: compressedBuffer,
+        performedBy: historyItem?.performedBy || userObjectId,
+        performedByName: historyItem?.performedByName || userName || 'User'
+      });
+
+      if (historyItem) {
+        await MasterSkuHistory.updateOne({ _id: historyItem._id }, { 'details.snapshotId': snapshot._id });
+      }
+    }
+  }
+
+  return { snapshot, historyItem };
+}
+
 async function handler(req, res) {
   const { method } = req;
   const user = req.userData;
@@ -37,6 +129,7 @@ async function handler(req, res) {
   const companyId = user.company;
   const companyObjectId = new mongoose.Types.ObjectId(companyId);
   const userObjectId = user._id ? new mongoose.Types.ObjectId(user._id) : null;
+  const userName = user.name || user.username || 'User';
   await connectToDatabase();
 
   // GET: Fetch snapshot data for download or preview
@@ -44,58 +137,15 @@ async function handler(req, res) {
     try {
       const { snapshotId, historyId } = req.query;
 
-      let snapshot = null;
-      if (snapshotId) {
-        snapshot = await MasterSkuSnapshot.findOne({ _id: snapshotId, company: companyObjectId });
-      } else if (historyId) {
-        snapshot = await MasterSkuSnapshot.findOne({ historyId, company: companyObjectId });
-        if (!snapshot) {
-          const history = await MasterSkuHistory.findOne({ _id: historyId, company: companyObjectId });
-          if (history?.details?.snapshotId) {
-            snapshot = await MasterSkuSnapshot.findOne({ _id: history.details.snapshotId, company: companyObjectId });
-          }
-        }
-      }
+      const { snapshot } = await findOrReconstructSkuSnapshot({
+        snapshotId,
+        historyId,
+        companyObjectId,
+        userObjectId,
+        userName
+      });
 
-      // If no snapshot record found (e.g., initial upload before snapshot model existed),
-      // fallback to current active master SKUs if matching
-      if (!snapshot) {
-        const activeCount = await MasterSku.countDocuments({ company: companyObjectId });
-        if (activeCount > 0) {
-          const activeItems = await MasterSku.find({ company: companyObjectId })
-            .select('sku origin size')
-            .lean();
-          
-          const historyItem = historyId ? await MasterSkuHistory.findOne({ _id: historyId, company: companyObjectId }) : null;
-          const fileName = historyItem?.details?.fileName || 'master_sku_snapshot.xlsx';
-          const snapshotItems = activeItems.map(i => ({ sku: i.sku, origin: i.origin || '', size: i.size || '' }));
-          const compressedBuffer = await gzipAsync(Buffer.from(JSON.stringify(snapshotItems)));
-          
-          snapshot = await MasterSkuSnapshot.create({
-            company: companyObjectId,
-            historyId: historyItem?._id,
-            fileName,
-            totalCount: activeItems.length,
-            compressedData: compressedBuffer,
-            performedBy: historyItem?.performedBy || userObjectId,
-            performedByName: historyItem?.performedByName || user.name || 'User'
-          });
-
-          if (historyItem) {
-            await MasterSkuHistory.updateOne({ _id: historyItem._id }, { 'details.snapshotId': snapshot._id });
-          }
-
-          return res.status(200).json({
-            success: true,
-            fileName,
-            totalCount: activeItems.length,
-            items: snapshotItems.map(i => ({
-              SKU: i.sku,
-              Origin: i.origin || '',
-              Size: i.size || ''
-            }))
-          });
-        }
+      if (!snapshot || !snapshot.compressedData) {
         return res.status(404).json({ message: 'Snapshot data not available for this upload entry.' });
       }
 
@@ -124,43 +174,17 @@ async function handler(req, res) {
     try {
       const { snapshotId, historyId } = req.body;
 
-      let snapshot = null;
-      if (snapshotId) {
-        snapshot = await MasterSkuSnapshot.findOne({ _id: snapshotId, company: companyObjectId });
-      } else if (historyId) {
-        snapshot = await MasterSkuSnapshot.findOne({ historyId, company: companyObjectId });
-        if (!snapshot) {
-          const history = await MasterSkuHistory.findOne({ _id: historyId, company: companyObjectId });
-          if (history?.details?.snapshotId) {
-            snapshot = await MasterSkuSnapshot.findOne({ _id: history.details.snapshotId, company: companyObjectId });
-          }
-        }
-      }
-
-      // If snapshot is still missing, check if active Master SKUs can provide it
-      if (!snapshot) {
-        const activeCount = await MasterSku.countDocuments({ company: companyObjectId });
-        const historyItem = historyId ? await MasterSkuHistory.findOne({ _id: historyId, company: companyObjectId }) : null;
-        if (activeCount > 0 && historyItem) {
-          const activeItems = await MasterSku.find({ company: companyObjectId }).select('sku origin size').lean();
-          const snapshotItems = activeItems.map(i => ({ sku: i.sku, origin: i.origin || '', size: i.size || '' }));
-          const compressedBuffer = await gzipAsync(Buffer.from(JSON.stringify(snapshotItems)));
-          snapshot = await MasterSkuSnapshot.create({
-            company: companyObjectId,
-            historyId: historyItem._id,
-            fileName: historyItem.details?.fileName || 'master_file.xlsx',
-            totalCount: activeItems.length,
-            compressedData: compressedBuffer,
-            performedBy: historyItem.performedBy || userObjectId,
-            performedByName: historyItem.performedByName || user.name || 'User'
-          });
-          await MasterSkuHistory.updateOne({ _id: historyItem._id }, { 'details.snapshotId': snapshot._id });
-        }
-      }
+      const { snapshot } = await findOrReconstructSkuSnapshot({
+        snapshotId,
+        historyId,
+        companyObjectId,
+        userObjectId,
+        userName
+      });
 
       if (!snapshot || !snapshot.compressedData) {
         return res.status(404).json({
-          message: 'Snapshot data for this previous upload was not preserved because it was uploaded before the snapshot feature was introduced. Any new uploads retain snapshots automatically.'
+          message: 'Target snapshot not found to restore'
         });
       }
 

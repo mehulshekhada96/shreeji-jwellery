@@ -43,6 +43,42 @@ const MasterRateSchema = new mongoose.Schema({
     type: String,
     default: '',
   },
+  rateHistory: [
+    {
+      effectiveFrom: {
+        type: Date,
+        required: true,
+      },
+      effectiveTo: {
+        type: Date,
+        default: null, // null indicates current active rate
+      },
+      itemRate: {
+        type: Number,
+        default: 0,
+      },
+      boxRate: {
+        type: Number,
+        default: 0,
+      },
+      boxReturnRate: {
+        type: Number,
+        default: 0,
+      },
+      changedAt: {
+        type: Date,
+        default: Date.now,
+      },
+      changedByName: {
+        type: String,
+        default: '',
+      },
+      note: {
+        type: String,
+        default: '',
+      },
+    }
+  ],
 }, { timestamps: true });
 
 MasterRateSchema.index({ company: 1, origin: 1 });

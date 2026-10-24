@@ -5,6 +5,10 @@ import MasterSkuSnapshot from '../../../models/MasterSkuSnapshot';
 import MasterRate from '../../../models/MasterRate';
 import { authMiddleware } from '../common/common.services';
 
+function escapeRegex(text) {
+  return text.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+}
+
 async function handler(req, res) {
   const { method } = req;
   const user = req.userData;
@@ -30,7 +34,8 @@ async function handler(req, res) {
       // Paginated query for the management UI
       const filter = { company: companyId };
       if (search && search.trim()) {
-        const queryRegex = new RegExp(search.trim(), 'i');
+        const escaped = escapeRegex(search.trim());
+        const queryRegex = new RegExp(escaped, 'i');
         filter.$or = [
           { sku: queryRegex },
           { origin: queryRegex },

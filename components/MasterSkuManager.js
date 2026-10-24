@@ -35,7 +35,7 @@ import {
   FaExternalLinkAlt
 } from 'react-icons/fa';
 
-export default function MasterSkuManager({ onMasterSkusUpdated, onNavigateToRate }) {
+export default function MasterSkuManager({ onMasterSkusUpdated, onNavigateToRate, initialSearch = '' }) {
   const router = useRouter();
   const [selectedOriginDetails, setSelectedOriginDetails] = useState(null);
   const [rateStatusFilter, setRateStatusFilter] = useState('all'); // 'all' | 'configured' | 'not_configured'
@@ -46,7 +46,15 @@ export default function MasterSkuManager({ onMasterSkusUpdated, onNavigateToRate
   const [totalCount, setTotalCount] = useState(0);
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(true);
-  const [search, setSearch] = useState('');
+  const [search, setSearch] = useState(() => initialSearch || (router.query?.search ? String(router.query.search) : ''));
+
+  // Sync search when query param or initialSearch changes
+  useEffect(() => {
+    const qSearch = initialSearch || (router.query?.search ? String(router.query.search) : '');
+    if (qSearch && qSearch !== search) {
+      setSearch(qSearch);
+    }
+  }, [initialSearch, router.query?.search]);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [history, setHistory] = useState([]);
@@ -81,13 +89,22 @@ export default function MasterSkuManager({ onMasterSkusUpdated, onNavigateToRate
   // Infinite Scroll Sentinel ref
   const observerTarget = useRef(null);
 
-  // Upload state
+  // Upload & Selective Diff state
   const [uploadFile, setUploadFile] = useState(null);
   const [parsedData, setParsedData] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(null);
   const [showUploadConfirm, setShowUploadConfirm] = useState(false);
   const fileInputRef = useRef(null);
+
+  // Diff & Selective Approval states
+  const [analyzingDiff, setAnalyzingDiff] = useState(false);
+  const [showDiffModal, setShowDiffModal] = useState(false);
+  const [diffResult, setDiffResult] = useState(null);
+  const [selectedDiffKeys, setSelectedDiffKeys] = useState(new Set());
+  const [diffFilterTab, setDiffFilterTab] = useState('all'); // 'all' | 'add' | 'edit' | 'unchanged'
+  const [diffSearchQuery, setDiffSearchQuery] = useState('');
+  const [applyingDiff, setApplyingDiff] = useState(false);
 
   // Add / Edit Modal state
   const [showAddModal, setShowAddModal] = useState(false);
@@ -311,7 +328,10 @@ export default function MasterSkuManager({ onMasterSkusUpdated, onNavigateToRate
       const token = localStorage.getItem('token');
       const res = await axios.post(
         '/api/master-sku/snapshot',
-        { historyId: restoringItem._id },
+        {
+          historyId: restoringItem._id,
+          snapshotId: restoringItem.details?.snapshotId || restoringItem.snapshotId
+        },
         { headers: { Authorization: `Bearer ${token}` } }
       );
 
@@ -464,15 +484,16 @@ export default function MasterSkuManager({ onMasterSkusUpdated, onNavigateToRate
         }
       }
 
-      setParsedData({
+      const meta = {
         fileName: file.name,
         totalRows: extractedItems.length,
         skuKey,
         originKey: originKey || 'Not detected',
         sizeKey: sizeKey || 'Not detected',
         items: extractedItems
-      });
-      setShowUploadConfirm(true);
+      };
+      setParsedData(meta);
+      await runSkuDiff(extractedItems, meta);
     } catch (err) {
       console.error('Error reading master file:', err);
       toast.error('Failed to parse file: ' + err.message);
@@ -481,86 +502,107 @@ export default function MasterSkuManager({ onMasterSkusUpdated, onNavigateToRate
     }
   };
 
-  // Perform chunked upload to server to prevent timeouts on large files
-  const confirmUpload = async () => {
-    if (!parsedData || !parsedData.items) return;
-
-    setUploading(true);
-    setUploadProgress({
-      currentChunk: 0,
-      totalChunks: 1,
-      processedItems: 0,
-      totalItems: parsedData.items.length,
-      percent: 0
-    });
-
+  // Run diff analysis against current database SKUs
+  const runSkuDiff = async (extractedItems, meta) => {
+    setAnalyzingDiff(true);
     try {
       const token = localStorage.getItem('token');
-      const CHUNK_SIZE = 5000;
-      const items = parsedData.items;
-      const totalItems = items.length;
-      const totalChunks = Math.ceil(totalItems / CHUNK_SIZE);
-      let previousCount = 0;
-      let finalResData = null;
+      const res = await axios.post(
+        '/api/master-sku/diff',
+        { items: extractedItems },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
 
-      for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
-        const chunkItems = items.slice(chunkIndex * CHUNK_SIZE, (chunkIndex + 1) * CHUNK_SIZE);
-        const percent = Math.round((chunkIndex / totalChunks) * 100);
+      if (res.data.success) {
+        const { summary, toAdd, toEdit, unchanged } = res.data;
+        setDiffResult({ summary, toAdd, toEdit, unchanged });
 
-        setUploadProgress({
-          currentChunk: chunkIndex + 1,
-          totalChunks,
-          processedItems: Math.min(chunkIndex * CHUNK_SIZE + chunkItems.length, totalItems),
-          totalItems,
-          percent
-        });
+        // By default, select all additions and edits
+        const initialSelected = new Set();
+        toAdd.forEach((_, idx) => initialSelected.add(`add_${idx}`));
+        toEdit.forEach((_, idx) => initialSelected.add(`edit_${idx}`));
+        setSelectedDiffKeys(initialSelected);
 
-        const res = await axios.post(
-          '/api/master-sku/upload',
-          {
-            chunkIndex,
-            totalChunks,
-            previousCount,
-            fileName: parsedData.fileName,
-            items: chunkItems
-          },
-          { headers: { Authorization: `Bearer ${token}` } }
-        );
-
-        if (res.data.previousCount !== undefined) {
-          previousCount = res.data.previousCount;
-        }
-
-        if (chunkIndex === totalChunks - 1) {
-          finalResData = res.data;
-        }
+        setDiffFilterTab(toAdd.length > 0 || toEdit.length > 0 ? 'all' : 'unchanged');
+        setDiffSearchQuery('');
+        setShowDiffModal(true);
       }
+    } catch (err) {
+      console.error('Diff analysis failed:', err);
+      toast.error(err.response?.data?.message || err.message || 'Failed to compare file with database');
+      setUploadFile(null);
+      setParsedData(null);
+    } finally {
+      setAnalyzingDiff(false);
+    }
+  };
 
-      setUploadProgress({
-        currentChunk: totalChunks,
-        totalChunks,
-        processedItems: totalItems,
-        totalItems,
-        percent: 100
-      });
+  // Apply approved additions and edits without deleting any existing records
+  const applySkuApproval = async () => {
+    if (!diffResult || !parsedData) return;
 
-      if (finalResData && finalResData.success) {
-        toast.success(finalResData.message || 'Master file uploaded successfully!');
-        if (finalResData.history) setHistory(finalResData.history);
-        if (finalResData.uploadHistory) setUploadHistory(finalResData.uploadHistory);
-        setShowUploadConfirm(false);
-        setUploadFile(null);
+    const { toAdd, toEdit } = diffResult;
+    const approvedItems = [];
+
+    toAdd.forEach((item, idx) => {
+      if (selectedDiffKeys.has(`add_${idx}`)) {
+        approvedItems.push({
+          type: 'add',
+          sku: item.sku,
+          origin: item.origin,
+          size: item.size
+        });
+      }
+    });
+
+    toEdit.forEach((item, idx) => {
+      if (selectedDiffKeys.has(`edit_${idx}`)) {
+        approvedItems.push({
+          type: 'edit',
+          sku: item.sku,
+          origin: item.newOrigin,
+          size: item.newSize,
+          oldOrigin: item.oldOrigin,
+          newOrigin: item.newOrigin,
+          oldSize: item.oldSize,
+          newSize: item.newSize
+        });
+      }
+    });
+
+    if (approvedItems.length === 0) {
+      toast.warning('No items selected. Please select at least one addition or update to save.');
+      return;
+    }
+
+    setApplyingDiff(true);
+    try {
+      const token = localStorage.getItem('token');
+      const res = await axios.post(
+        '/api/master-sku/upsert',
+        {
+          approvedItems,
+          fileName: parsedData.fileName
+        },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+
+      if (res.data.success) {
+        toast.success(res.data.message || `Successfully updated ${approvedItems.length} SKUs!`);
+        if (res.data.history) setHistory(res.data.history);
+        setShowDiffModal(false);
+        setDiffResult(null);
         setParsedData(null);
+        setUploadFile(null);
         if (fileInputRef.current) fileInputRef.current.value = '';
         fetchSkus(1, '', 'sku', 'asc', true);
         onMasterSkusUpdated?.();
       }
     } catch (err) {
-      console.error('Error saving master file:', err);
-      toast.error(err.response?.data?.message || err.message || 'Failed to save master file');
+      console.error('Error applying approved SKUs:', err);
+      toast.error(err.response?.data?.message || err.message || 'Failed to save approved SKUs');
     } finally {
-      setUploading(false);
-      setUploadProgress(null);
+      setApplyingDiff(false);
     }
   };
 
@@ -1262,94 +1304,469 @@ export default function MasterSkuManager({ onMasterSkusUpdated, onNavigateToRate
         </div>
       </div>
 
-      {/* Confirmation Modal: Replace Master File */}
-      {showUploadConfirm && parsedData && (
+      {/* Analyzing Diff Spinner Modal */}
+      {analyzingDiff && (
         <div className="fixed inset-0 z-50 overflow-y-auto bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl shadow-2xl max-w-lg w-full p-6 space-y-4 animate-in fade-in">
-            <div className="flex items-center gap-3 text-amber-600">
-              <div className="p-3 bg-amber-100 rounded-full">
-                <FaExclamationTriangle className="w-6 h-6 text-amber-600" />
-              </div>
-              <h3 className="text-lg font-bold text-gray-900">Confirm Master File Upload</h3>
+          <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-6 text-center space-y-3 animate-in fade-in">
+            <div className="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center mx-auto text-blue-600">
+              <FaSync className="animate-spin w-6 h-6" />
             </div>
+            <h3 className="font-bold text-gray-900 text-base">Comparing SKUs with Database...</h3>
+            <p className="text-xs text-gray-500 leading-relaxed">
+              Detecting newly added SKUs and modified origins/sizes against your existing catalog. No records will be deleted.
+            </p>
+          </div>
+        </div>
+      )}
 
-            <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-xs text-amber-900 space-y-1.5">
-              <p className="font-semibold">⚠️ Attention: Clean Sync Mode</p>
-              <p>
-                Uploading this file will <strong>replace all existing {totalCount} SKUs</strong> with the new file contents. Old history will record this action.
-              </p>
-            </div>
-
-            <div className="bg-gray-50 rounded-lg p-3.5 space-y-2 text-xs text-gray-700 border border-gray-200">
-              <div className="flex justify-between">
-                <span className="text-gray-500">File Name:</span>
-                <span className="font-semibold text-gray-900">{parsedData.fileName}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-500">Valid SKUs Found:</span>
-                <span className="font-semibold text-emerald-700">{parsedData.totalRows.toLocaleString()} SKUs</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-500">SKU Column:</span>
-                <span className="font-mono text-gray-800">{parsedData.skuKey}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-500">Origin Column:</span>
-                <span className="font-mono text-gray-800">{parsedData.originKey}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-500">Size Column:</span>
-                <span className="font-mono text-gray-800">{parsedData.sizeKey}</span>
-              </div>
-            </div>
-
-            {/* Progress bar during sync */}
-            {uploadProgress && (
-              <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg space-y-2">
-                <div className="flex justify-between text-xs text-blue-900 font-medium">
-                  <span>Uploading batch {uploadProgress.currentChunk} of {uploadProgress.totalChunks}...</span>
-                  <span>{uploadProgress.processedItems.toLocaleString()} / {uploadProgress.totalItems.toLocaleString()} SKUs ({uploadProgress.percent}%)</span>
+      {/* Selective Diff & Multi-Select Approval Modal */}
+      {showDiffModal && diffResult && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-4xl w-full p-5 sm:p-6 space-y-4 animate-in fade-in max-h-[92vh] flex flex-col">
+            {/* Header */}
+            <div className="flex items-start justify-between border-b pb-3">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-blue-100 rounded-xl text-blue-700">
+                  <FaFileExcel className="w-5 h-5" />
                 </div>
-                <div className="w-full bg-blue-200 rounded-full h-2 overflow-hidden">
-                  <div
-                    className="bg-blue-600 h-2 rounded-full transition-all duration-300"
-                    style={{ width: `${uploadProgress.percent}%` }}
-                  />
+                <div>
+                  <h3 className="text-lg font-bold text-gray-900 flex items-center gap-2">
+                    <span>Review & Approve SKU Changes</span>
+                  </h3>
+                  <p className="text-xs text-gray-500">
+                    File: <span className="font-semibold text-gray-700">{parsedData?.fileName}</span> • {parsedData?.totalRows?.toLocaleString()} rows in file
+                  </p>
                 </div>
               </div>
-            )}
-
-            <div className="flex items-center justify-end gap-3 pt-2">
               <button
                 type="button"
                 onClick={() => {
-                  setShowUploadConfirm(false);
+                  setShowDiffModal(false);
+                  setDiffResult(null);
                   setParsedData(null);
                   setUploadFile(null);
                   if (fileInputRef.current) fileInputRef.current.value = '';
                 }}
-                disabled={uploading}
-                className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm font-semibold hover:bg-gray-100 transition"
+                disabled={applyingDiff}
+                className="p-2 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100 transition"
+              >
+                <FaTimes className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Summary Cards */}
+            <div className="grid grid-cols-3 gap-3">
+              <div
+                onClick={() => setDiffFilterTab('add')}
+                className={`p-3 rounded-xl border transition cursor-pointer ${
+                  diffFilterTab === 'add'
+                    ? 'bg-emerald-50 border-emerald-300 ring-2 ring-emerald-500/20'
+                    : 'bg-emerald-50/50 border-emerald-200/70 hover:bg-emerald-50'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-emerald-800">New to Add</span>
+                  <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-100 font-bold text-emerald-700">
+                    +{diffResult.summary.addCount}
+                  </span>
+                </div>
+                <p className="text-[11px] text-emerald-600 mt-1">Not in current catalog</p>
+              </div>
+
+              <div
+                onClick={() => setDiffFilterTab('edit')}
+                className={`p-3 rounded-xl border transition cursor-pointer ${
+                  diffFilterTab === 'edit'
+                    ? 'bg-amber-50 border-amber-300 ring-2 ring-amber-500/20'
+                    : 'bg-amber-50/50 border-amber-200/70 hover:bg-amber-50'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-amber-800">Edits to Update</span>
+                  <span className="text-xs px-2 py-0.5 rounded-full bg-amber-100 font-bold text-amber-700">
+                    {diffResult.summary.editCount}
+                  </span>
+                </div>
+                <p className="text-[11px] text-amber-600 mt-1">Origin or size changed</p>
+              </div>
+
+              <div
+                onClick={() => setDiffFilterTab('unchanged')}
+                className={`p-3 rounded-xl border transition cursor-pointer ${
+                  diffFilterTab === 'unchanged'
+                    ? 'bg-gray-100 border-gray-400 ring-2 ring-gray-400/20'
+                    : 'bg-gray-50 border-gray-200 hover:bg-gray-100/60'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-gray-700">Unchanged</span>
+                  <span className="text-xs px-2 py-0.5 rounded-full bg-gray-200 font-bold text-gray-700">
+                    {diffResult.summary.unchangedCount}
+                  </span>
+                </div>
+                <p className="text-[11px] text-gray-500 mt-1">Already identical in DB</p>
+              </div>
+            </div>
+
+            {/* Quick Actions & Search Toolbar */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pt-1">
+              {/* Filter Tabs */}
+              <div className="flex items-center gap-1 bg-gray-100 p-1 rounded-lg text-xs font-medium">
+                <button
+                  type="button"
+                  onClick={() => setDiffFilterTab('all')}
+                  className={`px-3 py-1 rounded-md transition ${
+                    diffFilterTab === 'all'
+                      ? 'bg-white text-gray-900 shadow-xs font-bold'
+                      : 'text-gray-600 hover:text-gray-900'
+                  }`}
+                >
+                  All Changes ({diffResult.summary.addCount + diffResult.summary.editCount})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDiffFilterTab('add')}
+                  className={`px-3 py-1 rounded-md transition ${
+                    diffFilterTab === 'add'
+                      ? 'bg-white text-emerald-800 shadow-xs font-bold'
+                      : 'text-gray-600 hover:text-emerald-700'
+                  }`}
+                >
+                  New Only ({diffResult.summary.addCount})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDiffFilterTab('edit')}
+                  className={`px-3 py-1 rounded-md transition ${
+                    diffFilterTab === 'edit'
+                      ? 'bg-white text-amber-800 shadow-xs font-bold'
+                      : 'text-gray-600 hover:text-amber-700'
+                  }`}
+                >
+                  Edits Only ({diffResult.summary.editCount})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDiffFilterTab('unchanged')}
+                  className={`px-3 py-1 rounded-md transition ${
+                    diffFilterTab === 'unchanged'
+                      ? 'bg-white text-gray-800 shadow-xs font-bold'
+                      : 'text-gray-500 hover:text-gray-800'
+                  }`}
+                >
+                  Unchanged ({diffResult.summary.unchangedCount})
+                </button>
+              </div>
+
+              {/* Search Bar */}
+              <div className="relative">
+                <FaSearch className="absolute left-2.5 top-2.5 text-gray-400 w-3 h-3" />
+                <input
+                  type="text"
+                  placeholder="Filter changes..."
+                  value={diffSearchQuery}
+                  onChange={(e) => setDiffSearchQuery(e.target.value)}
+                  className="pl-7 pr-3 py-1 text-xs border border-gray-300 rounded-lg w-full sm:w-44 focus:outline-hidden focus:ring-1 focus:ring-blue-500"
+                />
+              </div>
+            </div>
+
+            {/* Selection Quick Buttons */}
+            {diffFilterTab !== 'unchanged' && (
+              <div className="flex items-center justify-between text-xs bg-slate-50 border border-slate-200 px-3 py-2 rounded-lg">
+                <div className="flex items-center gap-2">
+                  <span className="font-semibold text-gray-700">Selection:</span>
+                  <span className="px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 font-bold">
+                    {selectedDiffKeys.size} approved
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const allKeys = new Set();
+                      diffResult.toAdd.forEach((_, idx) => allKeys.add(`add_${idx}`));
+                      diffResult.toEdit.forEach((_, idx) => allKeys.add(`edit_${idx}`));
+                      setSelectedDiffKeys(allKeys);
+                    }}
+                    className="text-blue-600 hover:text-blue-800 hover:underline font-medium cursor-pointer"
+                  >
+                    Select All Changes
+                  </button>
+                  <span className="text-gray-300">|</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const newKeys = new Set(selectedDiffKeys);
+                      diffResult.toAdd.forEach((_, idx) => newKeys.add(`add_${idx}`));
+                      setSelectedDiffKeys(newKeys);
+                    }}
+                    className="text-emerald-700 hover:text-emerald-900 hover:underline font-medium cursor-pointer"
+                  >
+                    Select All New
+                  </button>
+                  <span className="text-gray-300">|</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const newKeys = new Set(selectedDiffKeys);
+                      diffResult.toEdit.forEach((_, idx) => newKeys.add(`edit_${idx}`));
+                      setSelectedDiffKeys(newKeys);
+                    }}
+                    className="text-amber-700 hover:text-amber-900 hover:underline font-medium cursor-pointer"
+                  >
+                    Select All Edits
+                  </button>
+                  <span className="text-gray-300">|</span>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedDiffKeys(new Set())}
+                    className="text-gray-500 hover:text-gray-700 hover:underline cursor-pointer"
+                  >
+                    Deselect All
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Diff Items Table */}
+            <div className="flex-1 overflow-y-auto border border-gray-200 rounded-xl min-h-[220px] max-h-[360px]">
+              {(() => {
+                const itemsToRender = [];
+                if (diffFilterTab === 'all' || diffFilterTab === 'add') {
+                  diffResult.toAdd.forEach((item, idx) => {
+                    itemsToRender.push({
+                      key: `add_${idx}`,
+                      itemIdx: idx,
+                      type: 'add',
+                      sku: item.sku,
+                      origin: item.origin,
+                      size: item.size
+                    });
+                  });
+                }
+                if (diffFilterTab === 'all' || diffFilterTab === 'edit') {
+                  diffResult.toEdit.forEach((item, idx) => {
+                    itemsToRender.push({
+                      key: `edit_${idx}`,
+                      itemIdx: idx,
+                      type: 'edit',
+                      sku: item.sku,
+                      origin: item.newOrigin,
+                      oldOrigin: item.oldOrigin,
+                      newOrigin: item.newOrigin,
+                      originChanged: item.originChanged,
+                      size: item.newSize,
+                      oldSize: item.oldSize,
+                      newSize: item.newSize,
+                      sizeChanged: item.sizeChanged
+                    });
+                  });
+                }
+                if (diffFilterTab === 'unchanged') {
+                  diffResult.unchanged.forEach((item, idx) => {
+                    itemsToRender.push({
+                      key: `unchanged_${idx}`,
+                      itemIdx: idx,
+                      type: 'unchanged',
+                      sku: item.sku,
+                      origin: item.origin,
+                      size: item.size
+                    });
+                  });
+                }
+
+                const filtered = diffSearchQuery.trim()
+                  ? itemsToRender.filter(i =>
+                      (i.sku && i.sku.toLowerCase().includes(diffSearchQuery.toLowerCase())) ||
+                      (i.origin && i.origin.toLowerCase().includes(diffSearchQuery.toLowerCase())) ||
+                      (i.newOrigin && i.newOrigin.toLowerCase().includes(diffSearchQuery.toLowerCase())) ||
+                      (i.oldOrigin && i.oldOrigin.toLowerCase().includes(diffSearchQuery.toLowerCase()))
+                    )
+                  : itemsToRender;
+
+                if (filtered.length === 0) {
+                  return (
+                    <div className="p-8 text-center text-gray-500 text-xs">
+                      No items matching this view or search filter.
+                    </div>
+                  );
+                }
+
+                const allFilteredChangableKeys = filtered.filter(i => i.type !== 'unchanged').map(i => i.key);
+                const allSelected = allFilteredChangableKeys.length > 0 && allFilteredChangableKeys.every(k => selectedDiffKeys.has(k));
+
+                return (
+                  <table className="w-full text-xs text-left">
+                    <thead className="bg-gray-50 text-gray-600 font-semibold sticky top-0 z-10 border-b">
+                      <tr>
+                        {diffFilterTab !== 'unchanged' && (
+                          <th className="p-2.5 w-10 text-center">
+                            <input
+                              type="checkbox"
+                              checked={allSelected}
+                              onChange={() => {
+                                const next = new Set(selectedDiffKeys);
+                                if (allSelected) {
+                                  allFilteredChangableKeys.forEach(k => next.delete(k));
+                                } else {
+                                  allFilteredChangableKeys.forEach(k => next.add(k));
+                                }
+                                setSelectedDiffKeys(next);
+                              }}
+                              className="rounded text-blue-600 focus:ring-blue-500 cursor-pointer"
+                            />
+                          </th>
+                        )}
+                        <th className="p-2.5 w-24">Change</th>
+                        <th className="p-2.5">SKU Code</th>
+                        <th className="p-2.5">Origin Item Name</th>
+                        <th className="p-2.5 w-28">Size</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {filtered.map(item => {
+                        const isSelected = selectedDiffKeys.has(item.key);
+                        const isChangable = item.type !== 'unchanged';
+
+                        return (
+                          <tr
+                            key={item.key}
+                            onClick={() => {
+                              if (!isChangable) return;
+                              const next = new Set(selectedDiffKeys);
+                              if (isSelected) next.delete(item.key);
+                              else next.add(item.key);
+                              setSelectedDiffKeys(next);
+                            }}
+                            className={`transition cursor-pointer ${
+                              !isChangable
+                                ? 'bg-gray-50/50 text-gray-500 cursor-default'
+                                : isSelected
+                                ? 'bg-blue-50/60 hover:bg-blue-50'
+                                : 'hover:bg-gray-50'
+                            }`}
+                          >
+                            {diffFilterTab !== 'unchanged' && (
+                              <td className="p-2.5 text-center" onClick={(e) => e.stopPropagation()}>
+                                {isChangable ? (
+                                  <input
+                                    type="checkbox"
+                                    checked={isSelected}
+                                    onChange={(e) => {
+                                      const next = new Set(selectedDiffKeys);
+                                      if (e.target.checked) next.add(item.key);
+                                      else next.delete(item.key);
+                                      setSelectedDiffKeys(next);
+                                    }}
+                                    className="rounded text-blue-600 focus:ring-blue-500 cursor-pointer"
+                                  />
+                                ) : (
+                                  <span className="text-gray-300">—</span>
+                                )}
+                              </td>
+                            )}
+                            <td className="p-2.5">
+                              {item.type === 'add' && (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">
+                                  <FaPlus className="w-2.5 h-2.5" />
+                                  <span>NEW</span>
+                                </span>
+                              )}
+                              {item.type === 'edit' && (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800">
+                                  <FaEdit className="w-2.5 h-2.5" />
+                                  <span>EDIT</span>
+                                </span>
+                              )}
+                              {item.type === 'unchanged' && (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-gray-100 text-gray-600">
+                                  MATCH
+                                </span>
+                              )}
+                            </td>
+                            <td className="p-2.5 font-mono font-semibold text-gray-900">{item.sku}</td>
+                            <td className="p-2.5">
+                              {item.type === 'edit' && item.originChanged ? (
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span className="line-through text-red-500 font-mono text-[11px]">
+                                    {item.oldOrigin || '(empty)'}
+                                  </span>
+                                  <span className="text-gray-400">➔</span>
+                                  <span className="font-semibold text-emerald-700 font-medium">
+                                    {item.newOrigin || '(empty)'}
+                                  </span>
+                                </div>
+                              ) : (
+                                <span className="text-gray-800">{item.origin || '—'}</span>
+                              )}
+                            </td>
+                            <td className="p-2.5">
+                              {item.type === 'edit' && item.sizeChanged ? (
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span className="line-through text-red-500 font-mono text-[11px]">
+                                    {item.oldSize || '(none)'}
+                                  </span>
+                                  <span className="text-gray-400">➔</span>
+                                  <span className="font-semibold text-emerald-700">
+                                    {item.newSize || '(none)'}
+                                  </span>
+                                </div>
+                              ) : (
+                                <span className="text-gray-800">{item.size || '—'}</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                );
+              })()}
+            </div>
+
+            {/* Safety Notice Banner */}
+            <div className="bg-emerald-50 border border-emerald-200/80 rounded-xl p-3 text-xs text-emerald-900 flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <FaCheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>
+                  <strong>Safe Selective Import:</strong> Only selected additions and edits will be applied. Existing catalog records not in this file will <strong>NEVER</strong> be deleted.
+                </span>
+              </div>
+            </div>
+
+            {/* Footer Actions */}
+            <div className="flex items-center justify-between pt-2 border-t">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowDiffModal(false);
+                  setDiffResult(null);
+                  setParsedData(null);
+                  setUploadFile(null);
+                  if (fileInputRef.current) fileInputRef.current.value = '';
+                }}
+                disabled={applyingDiff}
+                className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm font-semibold hover:bg-gray-100 transition cursor-pointer"
               >
                 Cancel
               </button>
+
               <button
                 type="button"
-                onClick={confirmUpload}
-                disabled={uploading}
-                className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-semibold shadow-md flex items-center gap-2 transition"
+                onClick={applySkuApproval}
+                disabled={applyingDiff || selectedDiffKeys.size === 0}
+                className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-300 text-white rounded-lg text-sm font-semibold shadow-md flex items-center gap-2 transition cursor-pointer"
               >
-                {uploading ? (
+                {applyingDiff ? (
                   <>
                     <FaSync className="animate-spin w-4 h-4" />
-                    <span>
-                      {uploadProgress ? `Syncing (${uploadProgress.percent}%)` : 'Processing...'}
-                    </span>
+                    <span>Applying Changes...</span>
                   </>
                 ) : (
                   <>
                     <FaCheckCircle className="w-4 h-4" />
-                    <span>Confirm & Replace</span>
+                    <span>Approve & Save ({selectedDiffKeys.size} Selected)</span>
                   </>
                 )}
               </button>
@@ -1405,15 +1822,20 @@ export default function MasterSkuManager({ onMasterSkusUpdated, onNavigateToRate
 
               <div>
                 <label className="block text-xs font-semibold text-gray-700 uppercase mb-1">
-                  Size (for tier-sorting, e.g. Small / Large)
+                  Size
                 </label>
-                <input
-                  type="text"
-                  value={formData.size}
+                <select
+                  value={formData.size || ''}
                   onChange={(e) => setFormData({ ...formData, size: e.target.value })}
-                  placeholder="e.g. Small, Large, Free Size"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500"
-                />
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-medium focus:ring-2 focus:ring-blue-500 bg-white"
+                >
+                  <option value="">Select Size</option>
+                  <option value="Large">Large</option>
+                  <option value="Small">Small</option>
+                  {formData.size && !['Large', 'Small'].includes(formData.size) && (
+                    <option value={formData.size}>{formData.size}</option>
+                  )}
+                </select>
               </div>
 
               <div className="flex items-center justify-end gap-3 pt-3 border-t">
@@ -1484,15 +1906,20 @@ export default function MasterSkuManager({ onMasterSkusUpdated, onNavigateToRate
 
               <div>
                 <label className="block text-xs font-semibold text-gray-700 uppercase mb-1">
-                  Size (Small / Large)
+                  Size
                 </label>
-                <input
-                  type="text"
-                  value={formData.size}
+                <select
+                  value={formData.size || ''}
                   onChange={(e) => setFormData({ ...formData, size: e.target.value })}
-                  placeholder="e.g. Small, Large"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500"
-                />
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-medium focus:ring-2 focus:ring-blue-500 bg-white"
+                >
+                  <option value="">Select Size</option>
+                  <option value="Large">Large</option>
+                  <option value="Small">Small</option>
+                  {formData.size && !['Large', 'Small'].includes(formData.size) && (
+                    <option value={formData.size}>{formData.size}</option>
+                  )}
+                </select>
               </div>
 
               <div className="flex items-center justify-end gap-3 pt-3 border-t">
@@ -2194,13 +2621,18 @@ export default function MasterSkuManager({ onMasterSkusUpdated, onNavigateToRate
                   <div className="grid grid-cols-2 gap-2">
                     <div>
                       <label className="block text-[10px] font-bold text-gray-600 uppercase mb-1">Size</label>
-                      <input
-                        type="text"
-                        value={quickRateData.size}
+                      <select
+                        value={quickRateData.size || ''}
                         onChange={(e) => setQuickRateData(prev => ({ ...prev, size: e.target.value }))}
-                        placeholder="e.g. Large, Small"
-                        className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-xs focus:ring-2 focus:ring-emerald-500 focus:outline-none"
-                      />
+                        className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-xs font-medium focus:ring-2 focus:ring-emerald-500 focus:outline-none bg-white"
+                      >
+                        <option value="">Select Size</option>
+                        <option value="Large">Large</option>
+                        <option value="Small">Small</option>
+                        {quickRateData.size && !['Large', 'Small'].includes(quickRateData.size) && (
+                          <option value={quickRateData.size}>{quickRateData.size}</option>
+                        )}
+                      </select>
                     </div>
                     <div>
                       <label className="block text-[10px] font-bold text-gray-600 uppercase mb-1">Image URL (Optional)</label>
