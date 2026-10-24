@@ -35,6 +35,9 @@ CancelledOrderSchema.index({ selectedDate: -1 });
 CancelledOrderSchema.index({ uploadedDate: -1 });
 CancelledOrderSchema.index({ startDate: 1, endDate: 1 });
 CancelledOrderSchema.index({ company: 1, isDeleted: 1 });
+CancelledOrderSchema.index({ company: 1, isDeleted: 1, startDate: -1 });
+CancelledOrderSchema.index({ company: 1, isDeleted: 1, selectedDate: -1 });
+CancelledOrderSchema.index({ company: 1, isDeleted: 1, startDate: -1, selectedDate: -1, companyName: 1, sku: 1 });
 
 // Clear model cache to ensure latest schema is used
 if (mongoose.models.CancelledOrder) {

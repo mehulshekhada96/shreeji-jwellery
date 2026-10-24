@@ -54,7 +54,7 @@ const handler = async (req, res) => {
     } catch (error) {
       res.status(500).json({ error: error.message, message: 'Error updating section' }); // Added separate message key
     }
-  } {
+  } else {
     // res.setHeader('Allow', ['GET']);
     res.status(405).end(`Method ${method} Not Allowed`);
   }

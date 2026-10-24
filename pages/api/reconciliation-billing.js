@@ -9,6 +9,10 @@ import Company from '../../models/company';
 import { authMiddleware } from './common/common.services';
 import moment from 'moment';
 
+export const config = {
+  maxDuration: 60,
+};
+
 async function handler(req, res) {
   if (req.method !== 'GET') {
     return res.status(405).json({ message: 'Method not allowed' });
@@ -118,35 +122,69 @@ async function handler(req, res) {
 
       const cleanMatchedSkus = matchingSkus.filter(Boolean);
 
-      if (cleanMatchedSkus.length > 0) {
-        const orSkuFilter = [
-          { sku: { $regex: escaped, $options: 'i' } },
-          { sku: { $in: cleanMatchedSkus } }
-        ];
-        invMatch.$or = orSkuFilter;
-        cancelMatch.$or = orSkuFilter;
-        returnMatch.$or = orSkuFilter;
-        custReturnMatch.$or = orSkuFilter;
-      } else {
-        const safeRegexFilter = { $regex: escaped, $options: 'i' };
-        invMatch.sku = safeRegexFilter;
-        cancelMatch.sku = safeRegexFilter;
-        returnMatch.sku = safeRegexFilter;
-        custReturnMatch.sku = safeRegexFilter;
-      }
+      const skuCondition = cleanMatchedSkus.length > 0
+        ? { $or: [{ sku: skuRegex }, { sku: { $in: cleanMatchedSkus } }] }
+        : { sku: skuRegex };
+
+      invMatch.$and = invMatch.$and || [];
+      invMatch.$and.push(skuCondition);
+
+      cancelMatch.$and = cancelMatch.$and || [];
+      cancelMatch.$and.push(skuCondition);
+
+      returnMatch.$and = returnMatch.$and || [];
+      returnMatch.$and.push(skuCondition);
+
+      custReturnMatch.$and = custReturnMatch.$and || [];
+      custReturnMatch.$and.push(skuCondition);
     }
 
-    // 2. Query all 4 streams in parallel
-    const [invRows, cancelRows, returnRows, custReturnRows] = await Promise.all([
+    // 2. Query all 6 streams in parallel in a single database round-trip
+    const [invRows, cancelRows, returnRows, custReturnRows, masterSkuDocs, masterRateDocs] = await Promise.all([
       SkuInventory.find(invMatch).select('companyName sku quantity selectedDate').lean(),
       CancelledOrder.find(cancelMatch).select('companyName sku quantity startDate selectedDate').lean(),
       ReturnOrder.find(returnMatch).select('companyName sku quantity startDate selectedDate').lean(),
-      CustomerReturnOrder.find(custReturnMatch).select('companyName sku quantity startDate selectedDate').lean()
+      CustomerReturnOrder.find(custReturnMatch).select('companyName sku quantity startDate selectedDate').lean(),
+      MasterSku.find({ company: companyId }).select('sku origin size').lean(),
+      MasterRate.find({ company: companyId }).select('origin imageLink itemRate boxRate boxReturnRate size rateHistory').lean()
     ]);
 
-    // 3. Collect unique SKUs and Company Names
-    const uniqueSkusSet = new Set();
-    const uniqueCompaniesSet = new Set();
+    // 3. Build in-memory lookup maps for instant O(1) resolution
+    const skuToOriginMap = new Map();
+    for (const doc of masterSkuDocs) {
+      const cleanSku = (doc.sku || '').trim().toLowerCase();
+      if (cleanSku) {
+        skuToOriginMap.set(cleanSku, {
+          origin: (doc.origin || '').trim(),
+          size: (doc.size || '').trim()
+        });
+      }
+    }
+
+    const originToRateMap = new Map();
+    for (const r of masterRateDocs) {
+      const cleanOrigin = (r.origin || '').trim().toLowerCase();
+      if (cleanOrigin) {
+        // Pre-parse rateHistory dates into numeric millisecond timestamps for instant comparison
+        const parsedHistory = (Array.isArray(r.rateHistory) ? r.rateHistory : []).map(h => ({
+          fromMs: h.effectiveFrom ? new Date(h.effectiveFrom).setHours(0, 0, 0, 0) : null,
+          toMs: h.effectiveTo ? new Date(h.effectiveTo).setHours(23, 59, 59, 999) : null,
+          itemRate: Number(h.itemRate) || 0,
+          boxRate: Number(h.boxRate) || 0,
+          boxReturnRate: Number(h.boxReturnRate) || 0
+        }));
+
+        originToRateMap.set(cleanOrigin, {
+          origin: r.origin,
+          itemRate: Number(r.itemRate) || 0,
+          boxRate: Number(r.boxRate) || 0,
+          boxReturnRate: Number(r.boxReturnRate) || 0,
+          imageLink: r.imageLink || '',
+          size: r.size || '',
+          parsedHistory
+        });
+      }
+    }
 
     // Canonical Company Normalization (case-insensitive deduplication, preferring UPPERCASE / TitleCase)
     const canonicalCompanyMap = new Map(); // lowercase -> best canonical display name
@@ -168,8 +206,8 @@ async function handler(req, res) {
       return canonicalCompanyMap.get(lower);
     };
 
+    const uniqueCompaniesSet = new Set();
     const registerItem = (row) => {
-      if (row.sku) uniqueSkusSet.add(row.sku.trim());
       if (row.companyName) {
         uniqueCompaniesSet.add(row.companyName.trim());
         getCanonicalName(row.companyName);
@@ -181,53 +219,17 @@ async function handler(req, res) {
     returnRows.forEach(registerItem);
     custReturnRows.forEach(registerItem);
 
-    const uniqueSkus = Array.from(uniqueSkusSet);
+    // Memoized Helper to resolve rates for an SKU on a specific order date
+    const rateCache = new Map();
 
-    // 4. Fetch MasterSku mapping (sku -> origin, size)
-    const masterSkuDocs = await MasterSku.find({
-      company: companyId,
-      sku: { $in: uniqueSkus.map(s => new RegExp(`^${s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i')) }
-    }).select('sku origin size').lean();
-
-    const skuToOriginMap = new Map();
-    const uniqueOriginsSet = new Set();
-
-    for (const doc of masterSkuDocs) {
-      const cleanSku = (doc.sku || '').trim().toLowerCase();
-      const cleanOrigin = (doc.origin || '').trim();
-      skuToOriginMap.set(cleanSku, {
-        origin: cleanOrigin,
-        size: (doc.size || '').trim()
-      });
-      if (cleanOrigin) {
-        uniqueOriginsSet.add(cleanOrigin.toLowerCase());
-      }
-    }
-
-    // 5. Fetch MasterRate mapping (origin -> rates & rateHistory)
-    const uniqueOrigins = Array.from(uniqueOriginsSet);
-    const masterRateDocs = await MasterRate.find({
-      company: companyId,
-      origin: { $in: uniqueOrigins.map(o => new RegExp(`^${o.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i')) }
-    }).select('origin imageLink itemRate boxRate boxReturnRate size rateHistory').lean();
-
-    const originToRateMap = new Map();
-    for (const r of masterRateDocs) {
-      const cleanOrigin = (r.origin || '').trim().toLowerCase();
-      originToRateMap.set(cleanOrigin, {
-        origin: r.origin,
-        itemRate: Number(r.itemRate) || 0,
-        boxRate: Number(r.boxRate) || 0,
-        boxReturnRate: Number(r.boxReturnRate) || 0,
-        imageLink: r.imageLink || '',
-        size: r.size || '',
-        rateHistory: Array.isArray(r.rateHistory) ? r.rateHistory : []
-      });
-    }
-
-    // Helper to resolve rates for an SKU on a specific order date
     const resolveRates = (rawSku, orderDateStr) => {
       const cleanSku = (rawSku || '').trim().toLowerCase();
+      const dKey = orderDateStr ? String(orderDateStr).slice(0, 10) : '';
+      const cacheKey = `${cleanSku}:::${dKey}`;
+      if (rateCache.has(cacheKey)) {
+        return rateCache.get(cacheKey);
+      }
+
       const skuMapping = skuToOriginMap.get(cleanSku);
       const originName = skuMapping?.origin || '';
       const originSize = skuMapping?.size || '';
@@ -239,24 +241,19 @@ async function handler(req, res) {
       let boxReturnRate = rateDoc?.boxReturnRate || 0;
 
       // Check if date-effective rateHistory matches this specific order date
-      if (rateDoc && Array.isArray(rateDoc.rateHistory) && rateDoc.rateHistory.length > 0 && orderDateStr) {
+      if (rateDoc && rateDoc.parsedHistory && rateDoc.parsedHistory.length > 0 && orderDateStr) {
         try {
-          const oDate = new Date(orderDateStr);
-          if (!isNaN(oDate.getTime())) {
-            oDate.setHours(12, 0, 0, 0);
-            const matched = rateDoc.rateHistory.find(h => {
-              const from = h.effectiveFrom ? new Date(h.effectiveFrom) : null;
-              if (from) from.setHours(0, 0, 0, 0);
-              const to = h.effectiveTo ? new Date(h.effectiveTo) : null;
-              if (to) to.setHours(23, 59, 59, 999);
-              if (from && oDate < from) return false;
-              if (to && oDate > to) return false;
+          const oDateMs = new Date(orderDateStr).setHours(12, 0, 0, 0);
+          if (!isNaN(oDateMs)) {
+            const matched = rateDoc.parsedHistory.find(h => {
+              if (h.fromMs && oDateMs < h.fromMs) return false;
+              if (h.toMs && oDateMs > h.toMs) return false;
               return true;
             });
             if (matched) {
-              itemRate = Number(matched.itemRate) || 0;
-              boxRate = Number(matched.boxRate) || 0;
-              boxReturnRate = Number(matched.boxReturnRate) || 0;
+              itemRate = matched.itemRate;
+              boxRate = matched.boxRate;
+              boxReturnRate = matched.boxReturnRate;
             }
           }
         } catch (e) {
@@ -272,7 +269,7 @@ async function handler(req, res) {
       const cancelUnitRate = itemRate;
       const retUnitRate = itemRate + boxReturnRate;
 
-      return {
+      const result = {
         origin: originName || 'Unmapped SKU',
         size: rateDoc?.size || originSize || '',
         imageLink: rateDoc?.imageLink || '',
@@ -284,6 +281,9 @@ async function handler(req, res) {
         cancelUnitRate,
         retUnitRate
       };
+
+      rateCache.set(cacheKey, result);
+      return result;
     };
 
     // 6. Aggregators
@@ -588,45 +588,27 @@ async function handler(req, res) {
     const monthWise = Array.from(monthMap.values()).sort((a, b) => (a.month < b.month ? 1 : -1));
 
     // Full list of unique companies active in the selected date range across all 4 streams
-    const [invComps, cancelComps, returnComps, custComps] = await Promise.all([
-      SkuInventory.distinct('companyName', {
-        company: companyId,
-        isDeleted: false,
-        selectedDate: dateQuery,
-        platform: platform === 'meesho' ? { $nin: ['flipkart', 'snapdeal', 'myntra'] } : platform
-      }),
-      CancelledOrder.distinct('companyName', {
-        company: companyId,
-        isDeleted: false,
-        $or: [{ startDate: dateQuery }, { selectedDate: dateQuery }]
-      }),
-      ReturnOrder.distinct('companyName', {
-        company: companyId,
-        isDeleted: false,
-        $or: [{ startDate: dateQuery }, { selectedDate: dateQuery }]
-      }),
-      CustomerReturnOrder.distinct('companyName', {
-        company: companyId,
-        isDeleted: false,
-        $or: [{ startDate: dateQuery }, { selectedDate: dateQuery }]
-      })
-    ]);
-
-    const allActiveComps = [...invComps, ...cancelComps, ...returnComps, ...custComps, ...Array.from(uniqueCompaniesSet)];
-    // Register all active company names to resolve best casing
-    allActiveComps.forEach(c => {
-      const clean = (c || '').trim();
-      if (clean) getCanonicalName(clean);
-    });
-
+    // Collected in-memory during single pass with zero extra database queries
     const canonicalUniqueComps = new Set();
-    allActiveComps.forEach(c => {
+    uniqueCompaniesSet.forEach(c => {
       const clean = (c || '').trim();
       if (clean) {
         canonicalUniqueComps.add(getCanonicalName(clean));
       }
     });
-    const companiesList = Array.from(canonicalUniqueComps).sort((a, b) => a.localeCompare(b));
+    let companiesList = Array.from(canonicalUniqueComps).sort((a, b) => a.localeCompare(b));
+    if (companiesFilter.length > 0) {
+      const allDistinctComps = await SkuInventory.distinct('companyName', {
+        company: companyId,
+        isDeleted: false
+      });
+      const allCompSet = new Set(companiesList);
+      allDistinctComps.forEach(c => {
+        const clean = (c || '').trim();
+        if (clean) allCompSet.add(getCanonicalName(clean));
+      });
+      companiesList = Array.from(allCompSet).sort((a, b) => a.localeCompare(b));
+    }
 
     return res.status(200).json({
       success: true,
