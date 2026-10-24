@@ -19,6 +19,11 @@
 # misc
 .DS_Store
 *.pem
+*.xlsx
+*.xlsm
+*.numbers
+*.pdf
+pages/api/master-sku/origin file->rate-> dabbi rate
 
 # debug
 npm-debug.log*

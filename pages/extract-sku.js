@@ -12,10 +12,12 @@ import FlipkartSort from '../components/FlipkartSort';
 import MyntraSort from '../components/MyntraSort';
 import MeeshoDirectSort from '../components/MeeshoDirectSort';
 import MasterSkuManager from '../components/MasterSkuManager';
+import MasterRateManager from '../components/MasterRateManager';
+import ReconciliationBilling from '../components/ReconciliationBilling';
 import { useFeatureFlags } from '../utils/useFeatureFlags';
 import { parseSnapdealPDF } from '../utils/snapdealInventoryParser';
 import { SiAmazon, SiFlipkart } from 'react-icons/si';
-import { FaShoppingBag, FaTag, FaBoxOpen, FaDatabase, FaCheckCircle, FaFileExcel, FaTimes, FaExternalLinkAlt, FaTrash, FaSync } from 'react-icons/fa';
+import { FaShoppingBag, FaTag, FaBoxOpen, FaDatabase, FaCheckCircle, FaFileExcel, FaTimes, FaExternalLinkAlt, FaTrash, FaSync, FaMoneyBillWave } from 'react-icons/fa';
 import { toast } from 'react-toastify';
 
 
@@ -112,10 +114,11 @@ export default function ExtractSKU() {
     if (router.isReady && router.query.tab) {
       const tab = router.query.tab;
       setSelectedTab(tab);
-      if (['sort', 'meesho-direct', 'amazon', 'flipkart', 'snapdeal', 'myntra', 'excel', 'master-sku'].includes(tab)) {
+      if (['sort', 'meesho-direct', 'amazon', 'flipkart', 'snapdeal', 'myntra', 'excel', 'master-sku', 'master-rate'].includes(tab)) {
         setMainTab('sku_management');
-      } else if (['inventory', 'cancelled-orders', 'returns', 'customer-returns'].includes(tab)) {
+      } else if (['inventory', 'cancelled-orders', 'returns', 'customer-returns', 'reconciliation-billing', 'billing'].includes(tab)) {
         setMainTab('meesho_reconciliation');
+        if (tab === 'billing') setSelectedTab('reconciliation-billing');
       } else if (tab === 'flipkart-inventory') {
         setMainTab('flipkart_reconciliation');
       } else if (tab === 'snapdeal-inventory') {
@@ -1916,7 +1919,7 @@ export default function ExtractSKU() {
               <button
                 onClick={() => {
                   setMainTab('meesho_reconciliation');
-                  if (!['inventory', 'cancelled-orders', 'returns', 'customer-returns'].includes(selectedTab)) setSelectedTab('inventory');
+                  if (!['inventory', 'cancelled-orders', 'returns', 'customer-returns', 'reconciliation-billing'].includes(selectedTab)) setSelectedTab('inventory');
                 }}
                 className={`py-3 px-1 border-b-2 font-medium text-sm transition-all duration-200 ${
                   mainTab === 'meesho_reconciliation'
@@ -2075,6 +2078,19 @@ export default function ExtractSKU() {
               </div>
             </button>
             <button
+              onClick={() => setSelectedTab('master-rate')}
+              className={`py-3 px-1 border-b-2 font-medium text-sm transition-all duration-200 ${
+                selectedTab === 'master-rate'
+                  ? 'border-emerald-400 text-emerald-400'
+                  : 'border-transparent text-white hover:text-gray-100 hover:border-gray-500'
+              }`}
+            >
+              <div className="flex items-center space-x-2">
+                <FaMoneyBillWave className={`w-4 h-4 ${selectedTab === 'master-rate' ? 'text-emerald-400' : 'text-gray-400'}`} title="Master Rate File" />
+                <span>Master Rate File</span>
+              </div>
+            </button>
+            <button
               onClick={() => setSelectedTab('excel')}
               disabled={!flagsLoading && (!featureFlags || featureFlags.isExcelFromPDF !== true)}
               className={`py-3 px-1 border-b-2 font-medium text-sm transition-all duration-200 ${
@@ -2157,6 +2173,19 @@ export default function ExtractSKU() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                 </svg>
                 <span>Customer Returns</span>
+              </div>
+            </button>
+            <button
+              onClick={() => setSelectedTab('reconciliation-billing')}
+              className={`py-3 px-1 border-b-2 font-medium text-sm transition-all duration-200 ${
+                selectedTab === 'reconciliation-billing'
+                  ? 'border-emerald-400 text-emerald-400'
+                  : 'border-transparent text-white hover:text-gray-100 hover:border-gray-500'
+              }`}
+            >
+              <div className="flex items-center space-x-2">
+                <FaMoneyBillWave className="w-4 h-4 text-emerald-400" />
+                <span>Billing & Revenue</span>
               </div>
             </button>
               </>
@@ -2652,7 +2681,31 @@ export default function ExtractSKU() {
 
         {selectedTab === 'master-sku' && (
           <div className="p-6">
-            <MasterSkuManager onMasterSkusUpdated={fetchMasterSkus} />
+            <MasterSkuManager
+              onMasterSkusUpdated={fetchMasterSkus}
+              initialSearch={router.query?.search ? String(router.query.search) : ''}
+              onNavigateToRate={(targetOrigin, options = {}) => {
+                setSelectedTab('master-rate');
+                setMainTab('sku_management');
+                const params = new URLSearchParams();
+                params.set('tab', 'master-rate');
+                params.set('search', targetOrigin);
+                if (options.autoAdd) {
+                  params.set('addOrigin', targetOrigin);
+                  if (options.size) params.set('size', options.size);
+                }
+                router.push(`/extract-sku?${params.toString()}`, undefined, { shallow: true });
+              }}
+            />
+          </div>
+        )}
+
+        {selectedTab === 'master-rate' && (
+          <div className="p-6">
+            <MasterRateManager
+              onMasterRatesUpdated={fetchMasterSkus}
+              initialSearch={router.query?.search ? String(router.query.search) : ''}
+            />
           </div>
         )}
 
@@ -2930,6 +2983,31 @@ export default function ExtractSKU() {
           ) : (
             <CancelOrder apiPath="customer-returns" title="Customer Returns" />
           )
+        )}
+
+        {selectedTab === 'reconciliation-billing' && (
+          <ReconciliationBilling
+            onNavigateToMasterSku={(options = {}) => {
+              setSelectedTab('master-sku');
+              setMainTab('sku_management');
+              const params = new URLSearchParams();
+              params.set('tab', 'master-sku');
+              if (options.search) params.set('search', options.search);
+              router.push(`/extract-sku?${params.toString()}`, undefined, { shallow: true });
+            }}
+            onNavigateToOrigin={(targetOrigin, options = {}) => {
+              setSelectedTab('master-rate');
+              setMainTab('sku_management');
+              const params = new URLSearchParams();
+              params.set('tab', 'master-rate');
+              params.set('search', targetOrigin);
+              if (options.autoAdd) {
+                params.set('addOrigin', targetOrigin);
+                if (options.size) params.set('size', options.size);
+              }
+              router.push(`/extract-sku?${params.toString()}`, undefined, { shallow: true });
+            }}
+          />
         )}
 
         {isInventoryTab && (

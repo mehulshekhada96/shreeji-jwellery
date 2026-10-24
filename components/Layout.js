@@ -154,7 +154,8 @@ const Layout = ({ children }) => {
   };
 
   const NavItem = ({ href, icon: Icon, label, submenu, menuKey }) => {
-    const isActive = router.pathname === href || (submenu && submenu.some(item => router.pathname === item.href));
+    const isSubActive = (subHref) => router.asPath === subHref || router.pathname === subHref;
+    const isActive = router.pathname === href || router.asPath === href || (submenu && submenu.some(item => isSubActive(item.href)));
     const hasSubmenu = submenu && submenu.length > 0;
 
     if (hasSubmenu) {
@@ -182,7 +183,7 @@ const Layout = ({ children }) => {
                   <Link href={item.href}>
                     <div
                       className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors duration-200 ${
-                        router.pathname === item.href ? 'bg-blue-600 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-white'
+                        isSubActive(item.href) ? 'bg-blue-600 text-white shadow-xs font-semibold' : 'text-gray-400 hover:bg-gray-800 hover:text-white'
                       }`}
                     >
                       {item.icon && <item.icon className="text-sm" />}
@@ -289,6 +290,7 @@ const Layout = ({ children }) => {
                       { href: '/extract-sku?tab=amazon', label: 'Amazon Sort', icon: SiAmazon },
                       { href: '/extract-sku?tab=myntra', label: 'Myntra Sort', icon: FaBoxOpen },
                       { href: '/extract-sku?tab=master-sku', label: 'Master SKU File', icon: FaDatabase },
+                      { href: '/extract-sku?tab=master-rate', label: 'Master Rate File', icon: FaMoneyBillWave },
                       { href: '/extract-sku?tab=excel', label: 'Generate Excel', icon: FaFileAlt, flag: 'isExcelFromPDF' },
                     ].filter(item => !item.flag || checkFeature(item.flag))}
                   />
@@ -302,8 +304,9 @@ const Layout = ({ children }) => {
                       { href: '/extract-sku?tab=cancelled-orders', label: 'Cancelled Orders', icon: FaTimesCircle, flag: 'isCancelledOrders' },
                       { href: '/extract-sku?tab=returns', label: 'Returns', icon: FaUndo, flag: 'isReturns' },
                       { href: '/extract-sku?tab=customer-returns', label: 'Customer Returns', icon: FaUndo, flag: 'isCustomerReturns' },
+                      { href: '/extract-sku?tab=reconciliation-billing', label: 'Billing & Revenue', icon: FaMoneyBillWave },
                     ].filter(item => {
-                      if (item.label === 'Cancelled Orders' || item.label === 'Returns' || item.label === 'Customer Returns') return true;
+                      if (item.label === 'Cancelled Orders' || item.label === 'Returns' || item.label === 'Customer Returns' || item.label === 'Billing & Revenue') return true;
                       return !item.flag || checkFeature(item.flag);
                     })}
                   />
