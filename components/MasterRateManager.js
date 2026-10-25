@@ -35,6 +35,8 @@ import {
   FaSquare,
   FaWrench
 } from 'react-icons/fa';
+import DabbiSelect from './DabbiSelect';
+import DabbiManager from './DabbiManager';
 
 export default function MasterRateManager({ onMasterRatesUpdated, initialSearch = '' }) {
   const router = useRouter();
@@ -69,7 +71,9 @@ export default function MasterRateManager({ onMasterRatesUpdated, initialSearch 
         itemRate: '',
         boxRate: '',
         boxReturnRate: '',
-        size: router.query?.size ? String(router.query.size) : ''
+        size: router.query?.size ? String(router.query.size) : '',
+        dabbi: null,
+        dabbiName: ''
       });
       setShowAddModal(true);
     }
@@ -133,6 +137,7 @@ export default function MasterRateManager({ onMasterRatesUpdated, initialSearch 
   // Add / Edit Modal state
   const [showAddModal, setShowAddModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
+  const [showDabbiManager, setShowDabbiManager] = useState(false);
   const [editingItem, setEditingItem] = useState(null);
   const [formData, setFormData] = useState({
     origin: '',
@@ -140,7 +145,9 @@ export default function MasterRateManager({ onMasterRatesUpdated, initialSearch 
     itemRate: '',
     boxRate: '',
     boxReturnRate: '',
-    size: ''
+    size: '',
+    dabbi: null,
+    dabbiName: ''
   });
   const [saving, setSaving] = useState(false);
 
@@ -775,7 +782,9 @@ export default function MasterRateManager({ onMasterRatesUpdated, initialSearch 
           itemRate: Number(formData.itemRate) || 0,
           boxRate: Number(formData.boxRate) || 0,
           boxReturnRate: Number(formData.boxReturnRate) || 0,
-          size: (formData.size || '').trim()
+          size: (formData.size || '').trim(),
+          dabbi: formData.dabbi || null,
+          dabbiName: formData.dabbiName || ''
         },
         { headers: { Authorization: `Bearer ${token}` } }
       );
@@ -783,7 +792,7 @@ export default function MasterRateManager({ onMasterRatesUpdated, initialSearch 
       if (res.data.success) {
         toast.success(res.data.message || 'Original Product Rate added');
         setShowAddModal(false);
-        setFormData({ origin: '', imageLink: '', itemRate: '', boxRate: '', boxReturnRate: '', size: '' });
+        setFormData({ origin: '', imageLink: '', itemRate: '', boxRate: '', boxReturnRate: '', size: '', dabbi: null, dabbiName: '' });
         fetchRates(1, search, sortBy, sortOrder, true);
         onMasterRatesUpdated?.();
       }
@@ -804,7 +813,9 @@ export default function MasterRateManager({ onMasterRatesUpdated, initialSearch 
       itemRate: item.itemRate != null ? item.itemRate : '',
       boxRate: item.boxRate != null ? item.boxRate : '',
       boxReturnRate: item.boxReturnRate != null ? item.boxReturnRate : '',
-      size: item.size || ''
+      size: item.size || '',
+      dabbi: item.dabbi || null,
+      dabbiName: item.dabbiName || ''
     });
     setRateEffectiveFromDate(new Date().toISOString().split('T')[0]);
     setIsRateCorrection(false);
@@ -832,6 +843,8 @@ export default function MasterRateManager({ onMasterRatesUpdated, initialSearch 
           boxRate: Number(formData.boxRate) || 0,
           boxReturnRate: Number(formData.boxReturnRate) || 0,
           size: (formData.size || '').trim(),
+          dabbi: formData.dabbi || null,
+          dabbiName: formData.dabbiName || '',
           effectiveFromDate: rateEffectiveFromDate,
           isCorrection: isRateCorrection
         },
@@ -1294,8 +1307,17 @@ export default function MasterRateManager({ onMasterRatesUpdated, initialSearch 
 
           <div className="flex items-center gap-2 flex-wrap">
             <button
+              type="button"
+              onClick={() => setShowDabbiManager(true)}
+              className="flex items-center gap-1.5 px-3.5 py-2 bg-purple-50 hover:bg-purple-100 text-purple-700 text-sm font-semibold rounded-lg border border-purple-200 transition cursor-pointer shadow-xs"
+              title="Manage Dabbi (Packaging Boxes) & Rates"
+            >
+              <FaBoxOpen className="w-4 h-4 text-purple-600" />
+              <span>Dabbi Config</span>
+            </button>
+            <button
               onClick={() => {
-                setFormData({ origin: '', imageLink: '', itemRate: '', boxRate: '', boxReturnRate: '' });
+                setFormData({ origin: '', imageLink: '', itemRate: '', boxRate: '', boxReturnRate: '', size: '', dabbi: null, dabbiName: '' });
                 setShowAddModal(true);
               }}
               className="flex items-center gap-1.5 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold rounded-lg shadow-xs transition cursor-pointer"
@@ -1483,7 +1505,12 @@ export default function MasterRateManager({ onMasterRatesUpdated, initialSearch 
                         {item.itemRate != null ? `₹${Number(item.itemRate).toFixed(2)}` : '₹0.00'}
                       </td>
                       <td className="px-5 py-3.5 font-mono text-gray-800">
-                        {item.boxRate != null ? `₹${Number(item.boxRate).toFixed(2)}` : '₹0.00'}
+                        <div>{item.boxRate != null ? `₹${Number(item.boxRate).toFixed(2)}` : '₹0.00'}</div>
+                        {item.dabbiName && (
+                          <div className="text-[10px] text-purple-700 font-sans font-semibold truncate max-w-[120px]" title={`Dabbi: ${item.dabbiName}`}>
+                            📦 {item.dabbiName}
+                          </div>
+                        )}
                       </td>
                       <td className="px-5 py-3.5 font-mono text-gray-800">
                         {item.boxReturnRate != null ? `₹${Number(item.boxReturnRate).toFixed(2)}` : '₹0.00'}
@@ -2407,30 +2434,65 @@ export default function MasterRateManager({ onMasterRatesUpdated, initialSearch 
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">Dabbi Rate (₹)</label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    value={formData.boxRate}
-                    onChange={(e) => setFormData(prev => ({ ...prev, boxRate: e.target.value }))}
-                    placeholder="0.00"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono focus:ring-2 focus:ring-emerald-500 focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">Dabbi Return Rate (₹)</label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    value={formData.boxReturnRate}
-                    onChange={(e) => setFormData(prev => ({ ...prev, boxReturnRate: e.target.value }))}
-                    placeholder="0.00"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono focus:ring-2 focus:ring-emerald-500 focus:outline-none"
-                  />
+              {/* Dabbi Selection & Rates */}
+              <div className="space-y-3 bg-purple-50/40 p-3 rounded-xl border border-purple-100">
+                <DabbiSelect
+                  value={formData.dabbi || ''}
+                  selectedName={formData.dabbiName}
+                  boxRate={formData.boxRate}
+                  boxReturnRate={formData.boxReturnRate}
+                  size={formData.size}
+                  onChange={(selectedDabbi, isCustom) => {
+                    if (selectedDabbi) {
+                      setFormData(prev => ({
+                        ...prev,
+                        dabbi: selectedDabbi._id,
+                        dabbiName: selectedDabbi.name,
+                        boxRate: selectedDabbi.boxRate != null ? selectedDabbi.boxRate : prev.boxRate,
+                        boxReturnRate: selectedDabbi.boxReturnRate != null ? selectedDabbi.boxReturnRate : prev.boxReturnRate,
+                        size: selectedDabbi.size && !prev.size ? selectedDabbi.size : prev.size
+                      }));
+                    } else if (isCustom) {
+                      setFormData(prev => ({
+                        ...prev,
+                        dabbi: null,
+                        dabbiName: 'Custom'
+                      }));
+                    } else {
+                      setFormData(prev => ({
+                        ...prev,
+                        dabbi: null,
+                        dabbiName: ''
+                      }));
+                    }
+                  }}
+                />
+
+                <div className="grid grid-cols-2 gap-3 pt-1">
+                  <div>
+                    <label className="block text-[11px] font-semibold text-gray-700 mb-1">Dabbi Rate (₹)</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={formData.boxRate}
+                      onChange={(e) => setFormData(prev => ({ ...prev, boxRate: e.target.value }))}
+                      placeholder="0.00"
+                      className="w-full px-3 py-1.5 border border-gray-300 rounded-lg text-sm font-mono focus:ring-2 focus:ring-purple-500 focus:outline-none bg-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-gray-700 mb-1">Dabbi Return Rate (₹)</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={formData.boxReturnRate}
+                      onChange={(e) => setFormData(prev => ({ ...prev, boxReturnRate: e.target.value }))}
+                      placeholder="0.00"
+                      className="w-full px-3 py-1.5 border border-gray-300 rounded-lg text-sm font-mono focus:ring-2 focus:ring-purple-500 focus:outline-none bg-white"
+                    />
+                  </div>
                 </div>
               </div>
 
@@ -2528,28 +2590,63 @@ export default function MasterRateManager({ onMasterRatesUpdated, initialSearch 
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">Dabbi Rate (₹)</label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    value={formData.boxRate}
-                    onChange={(e) => setFormData(prev => ({ ...prev, boxRate: e.target.value }))}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono focus:ring-2 focus:ring-emerald-500 focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">Dabbi Return Rate (₹)</label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    value={formData.boxReturnRate}
-                    onChange={(e) => setFormData(prev => ({ ...prev, boxReturnRate: e.target.value }))}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono focus:ring-2 focus:ring-emerald-500 focus:outline-none"
-                  />
+              {/* Dabbi Selection & Rates */}
+              <div className="space-y-3 bg-purple-50/40 p-3 rounded-xl border border-purple-100">
+                <DabbiSelect
+                  value={formData.dabbi || ''}
+                  selectedName={formData.dabbiName}
+                  boxRate={formData.boxRate}
+                  boxReturnRate={formData.boxReturnRate}
+                  size={formData.size}
+                  onChange={(selectedDabbi, isCustom) => {
+                    if (selectedDabbi) {
+                      setFormData(prev => ({
+                        ...prev,
+                        dabbi: selectedDabbi._id,
+                        dabbiName: selectedDabbi.name,
+                        boxRate: selectedDabbi.boxRate != null ? selectedDabbi.boxRate : prev.boxRate,
+                        boxReturnRate: selectedDabbi.boxReturnRate != null ? selectedDabbi.boxReturnRate : prev.boxReturnRate,
+                        size: selectedDabbi.size && !prev.size ? selectedDabbi.size : prev.size
+                      }));
+                    } else if (isCustom) {
+                      setFormData(prev => ({
+                        ...prev,
+                        dabbi: null,
+                        dabbiName: 'Custom'
+                      }));
+                    } else {
+                      setFormData(prev => ({
+                        ...prev,
+                        dabbi: null,
+                        dabbiName: ''
+                      }));
+                    }
+                  }}
+                />
+
+                <div className="grid grid-cols-2 gap-3 pt-1">
+                  <div>
+                    <label className="block text-[11px] font-semibold text-gray-700 mb-1">Dabbi Rate (₹)</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={formData.boxRate}
+                      onChange={(e) => setFormData(prev => ({ ...prev, boxRate: e.target.value }))}
+                      className="w-full px-3 py-1.5 border border-gray-300 rounded-lg text-sm font-mono focus:ring-2 focus:ring-purple-500 focus:outline-none bg-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-gray-700 mb-1">Dabbi Return Rate (₹)</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={formData.boxReturnRate}
+                      onChange={(e) => setFormData(prev => ({ ...prev, boxReturnRate: e.target.value }))}
+                      className="w-full px-3 py-1.5 border border-gray-300 rounded-lg text-sm font-mono focus:ring-2 focus:ring-purple-500 focus:outline-none bg-white"
+                    />
+                  </div>
                 </div>
               </div>
 
@@ -2948,6 +3045,13 @@ export default function MasterRateManager({ onMasterRatesUpdated, initialSearch 
           </div>
         </div>
       )}
+
+      {/* Dabbi Manager Modal */}
+      <DabbiManager
+        isOpen={showDabbiManager}
+        onClose={() => setShowDabbiManager(false)}
+        onDabbiUpdated={() => fetchRates(page, search, sortBy, sortOrder, true)}
+      />
     </div>
   );
 }

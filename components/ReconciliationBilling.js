@@ -33,6 +33,7 @@ import {
   FaPlus,
   FaDownload
 } from 'react-icons/fa';
+import DabbiSelect from './DabbiSelect';
 
 export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateToMasterSku }) {
   const router = useRouter();
@@ -84,6 +85,8 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
     itemRate: '',
     boxRate: '2.40',
     boxReturnRate: '2.40',
+    dabbi: null,
+    dabbiName: '',
     imageLink: '',
     effectiveFromDate: '',
     isCorrection: true,
@@ -275,6 +278,8 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
       boxReturnRate: s.boxReturnRate != null && s.boxReturnRate > 0 
         ? s.boxReturnRate 
         : (matchedRate?.boxReturnRate != null ? matchedRate.boxReturnRate : (printRate || 2.40)),
+      dabbi: matchedRate?.dabbi || null,
+      dabbiName: matchedRate?.dabbiName || '',
       imageLink: s.imageLink || (matchedRate?.imageLink) || '',
       effectiveFromDate: startDate || moment().format('YYYY-MM-DD'),
       isCorrection: true,
@@ -294,6 +299,8 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
       itemRate: matched?.itemRate !== undefined ? matched.itemRate : prev.itemRate,
       boxRate: matched?.boxRate !== undefined ? matched.boxRate : prev.boxRate,
       boxReturnRate: matched?.boxReturnRate !== undefined ? matched.boxReturnRate : prev.boxReturnRate,
+      dabbi: matched?.dabbi !== undefined ? matched.dabbi : prev.dabbi,
+      dabbiName: matched?.dabbiName !== undefined ? matched.dabbiName : prev.dabbiName,
       imageLink: matched?.imageLink !== undefined ? matched.imageLink : prev.imageLink,
     }));
   };
@@ -320,6 +327,8 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
         itemRate: quickMapModal.itemRate !== '' ? Number(quickMapModal.itemRate) : 0,
         boxRate: quickMapModal.boxRate !== '' ? Number(quickMapModal.boxRate) : 2.40,
         boxReturnRate: quickMapModal.boxReturnRate !== '' ? Number(quickMapModal.boxReturnRate) : 2.40,
+        dabbi: quickMapModal.dabbi || null,
+        dabbiName: quickMapModal.dabbiName || '',
         imageLink: quickMapModal.imageLink?.trim() || '',
         effectiveFromDate: quickMapModal.effectiveFromDate || undefined,
         isCorrection: quickMapModal.isCorrection,
@@ -791,66 +800,68 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
     : '0.0';
 
   return (
-    <div className="space-y-6">
-      {/* Top Banner & Title */}
-      <div className="bg-white rounded-2xl shadow-xs border border-gray-200/80 p-5 sm:p-6">
-        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-          <div>
-            <div className="flex items-center gap-2.5">
-              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-white shadow-md shadow-emerald-500/20">
-                <FaMoneyBillWave className="w-5 h-5" />
+    <div className="space-y-5">
+
+      {/* ── TOP CONTROL PANEL ── */}
+      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+
+        {/* Row 1: Title + Action Buttons */}
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 px-5 py-4 border-b border-gray-100">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-white shadow shadow-emerald-500/30 shrink-0">
+              <FaMoneyBillWave className="w-4 h-4" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h1 className="text-base font-black text-gray-900 tracking-tight">Reconciliation Billing & Revenue</h1>
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold tracking-wide uppercase">Live</span>
               </div>
-              <div>
-                <h1 className="text-xl sm:text-2xl font-black text-gray-900 tracking-tight flex items-center gap-2">
-                  <span>Reconciliation Billing & Revenue</span>
-                  <span className="text-xs px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200/60 font-semibold">
-                    Live Rates
-                  </span>
-                </h1>
-                <p className="text-xs sm:text-sm text-gray-500 mt-0.5">
-                  Calculated using live Master Rates: Dispatched = <span className="font-semibold text-gray-700">Rate + Dabbi + ₹{printRate} Print</span> | Cancelled = <span className="font-semibold text-gray-700">Rate + Dabbi Return</span> | Returns = <span className="font-semibold text-gray-700">RTO 100% + Cust {custReturnPercent}%</span>
-                </p>
-              </div>
+              <p className="text-[11px] text-gray-400 mt-0.5">
+                Dispatched = <span className="font-semibold text-gray-600">Rate + Dabbi + ₹{printRate} Print</span>
+                <span className="mx-1.5 text-gray-300">·</span>
+                Cancelled = <span className="font-semibold text-gray-600">Rate + Dabbi Return</span>
+                <span className="mx-1.5 text-gray-300">·</span>
+                Returns = <span className="font-semibold text-gray-600">RTO 100% + Cust {custReturnPercent}%</span>
+              </p>
             </div>
           </div>
 
-          {/* Action buttons */}
-          <div className="flex items-center gap-2 flex-wrap">
-            <button
-              type="button"
-              onClick={() => setIsFinalHisabOpen(true)}
-              className="flex items-center gap-1.5 px-4 py-2 bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-700 hover:to-blue-700 text-white text-xs font-bold rounded-xl shadow-md shadow-indigo-500/20 transition cursor-pointer"
-              title="Open Final Settlement Ledger"
-            >
-              <FaCalculator className="w-3.5 h-3.5" />
-              <span>📑 ફાઈનલ હિસાબ (Final Settlement)</span>
-            </button>
+          <div className="flex items-center gap-2 shrink-0">
             <button
               type="button"
               onClick={fetchBilling}
               disabled={loading}
-              className="flex items-center gap-1.5 px-3.5 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-semibold rounded-xl transition cursor-pointer"
+              className="flex items-center gap-1.5 px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-600 text-xs font-semibold rounded-lg transition cursor-pointer"
               title="Refresh calculation"
             >
-              <FaSync className={`w-3.5 h-3.5 ${loading ? 'animate-spin text-blue-600' : ''}`} />
+              <FaSync className={`w-3 h-3 ${loading ? 'animate-spin text-blue-500' : ''}`} />
               <span>Refresh</span>
             </button>
             <button
               type="button"
               onClick={handleExportExcel}
-              className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-xl shadow-xs transition cursor-pointer"
+              className="flex items-center gap-1.5 px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-lg shadow-sm transition cursor-pointer"
               title="Export complete billing workbook to Excel"
             >
-              <FaFileExcel className="w-3.5 h-3.5" />
-              <span>Export Billing Excel</span>
+              <FaFileExcel className="w-3 h-3" />
+              <span>Export Excel</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setIsFinalHisabOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-2 bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-700 hover:to-violet-700 text-white text-xs font-bold rounded-lg shadow-sm shadow-indigo-500/20 transition cursor-pointer"
+              title="Open Final Settlement Ledger"
+            >
+              <FaCalculator className="w-3 h-3" />
+              <span>📑 ફાઈનલ હિસાબ</span>
             </button>
           </div>
         </div>
 
-        {/* Filter Controls Row */}
-        <div className="mt-6 pt-5 border-t border-gray-100 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3.5">
-          {/* Preset Buttons */}
-          <div className="lg:col-span-2 flex items-center gap-1.5 flex-wrap">
+        {/* Row 2: Date Presets + Date Range + Company Filter */}
+        <div className="flex flex-col lg:flex-row lg:items-center gap-3 px-5 py-3.5 border-b border-gray-100 bg-gray-50/40">
+          {/* Date Presets */}
+          <div className="flex items-center gap-1 bg-gray-200/60 p-0.5 rounded-lg shrink-0">
             {[
               { id: 'today', label: 'Today' },
               { id: 'yesterday', label: 'Yesterday' },
@@ -862,10 +873,10 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
                 key={p.id}
                 type="button"
                 onClick={() => handlePreset(p.id)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer ${
+                className={`px-2.5 py-1.5 rounded-md text-[11px] font-semibold transition cursor-pointer whitespace-nowrap ${
                   selectedPreset === p.id
-                    ? 'bg-blue-600 text-white shadow-xs'
-                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                    ? 'bg-white text-blue-700 shadow-sm font-bold'
+                    : 'text-gray-500 hover:text-gray-800'
                 }`}
               >
                 {p.label}
@@ -873,44 +884,37 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
             ))}
           </div>
 
-          {/* Date Picker Range */}
+          {/* Date Range */}
           <div className="flex items-center gap-2">
-            <div className="relative flex-1">
-              <input
-                type="date"
-                value={startDate}
-                onChange={(e) => {
-                  setStartDate(e.target.value);
-                  setSelectedPreset('custom');
-                }}
-                className="w-full px-3 py-1.5 border border-gray-300 rounded-lg text-xs font-medium focus:ring-2 focus:ring-blue-500 focus:outline-none"
-              />
-            </div>
-            <span className="text-gray-400 text-xs">to</span>
-            <div className="relative flex-1">
-              <input
-                type="date"
-                value={endDate}
-                onChange={(e) => {
-                  setEndDate(e.target.value);
-                  setSelectedPreset('custom');
-                }}
-                className="w-full px-3 py-1.5 border border-gray-300 rounded-lg text-xs font-medium focus:ring-2 focus:ring-blue-500 focus:outline-none"
-              />
-            </div>
+            <input
+              type="date"
+              value={startDate}
+              onChange={(e) => { setStartDate(e.target.value); setSelectedPreset('custom'); }}
+              className="px-3 py-1.5 border border-gray-200 bg-white rounded-lg text-xs font-medium focus:ring-2 focus:ring-blue-500 focus:outline-none"
+            />
+            <span className="text-gray-300 text-xs font-bold">→</span>
+            <input
+              type="date"
+              value={endDate}
+              onChange={(e) => { setEndDate(e.target.value); setSelectedPreset('custom'); }}
+              className="px-3 py-1.5 border border-gray-200 bg-white rounded-lg text-xs font-medium focus:ring-2 focus:ring-blue-500 focus:outline-none"
+            />
           </div>
 
-          {/* Multi-Company Filter Dropdown */}
-          <div className="relative" ref={companyDropdownRef}>
+          {/* Divider */}
+          <div className="hidden lg:block w-px h-5 bg-gray-200" />
+
+          {/* Company Dropdown */}
+          <div className="relative flex-1 max-w-xs" ref={companyDropdownRef}>
             <button
               type="button"
               onClick={() => setIsCompanyDropdownOpen(prev => !prev)}
               className={`w-full px-3 py-1.5 border rounded-lg text-xs font-medium flex items-center justify-between gap-2 bg-white transition cursor-pointer ${
-                isCompanyDropdownOpen ? 'border-blue-500 ring-2 ring-blue-100' : 'border-gray-300 hover:border-gray-400'
-              } ${selectedCompanies.length > 0 ? 'text-blue-900 font-semibold border-blue-400 bg-blue-50/40' : 'text-gray-700'}`}
+                isCompanyDropdownOpen ? 'border-blue-500 ring-2 ring-blue-100' : 'border-gray-200 hover:border-gray-300'
+              } ${selectedCompanies.length > 0 ? 'text-blue-800 border-blue-300 bg-blue-50/50' : 'text-gray-600'}`}
             >
               <div className="flex items-center gap-1.5 truncate">
-                <FaBuilding className={`w-3.5 h-3.5 shrink-0 ${selectedCompanies.length > 0 ? 'text-blue-600' : 'text-gray-400'}`} />
+                <FaBuilding className={`w-3 h-3 shrink-0 ${selectedCompanies.length > 0 ? 'text-blue-500' : 'text-gray-400'}`} />
                 <span className="truncate">
                   {selectedCompanies.length === 0 && `All Companies (${companiesSource.length})`}
                   {selectedCompanies.length === 1 && selectedCompanies[0]}
@@ -919,396 +923,302 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
               </div>
               <div className="flex items-center gap-1 shrink-0">
                 {selectedCompanies.length > 0 && (
-                  <span
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleClearAllCompanies();
-                    }}
-                    className="p-0.5 rounded-full hover:bg-blue-100 text-blue-500 hover:text-blue-800 cursor-pointer"
-                    title="Clear company filter"
-                  >
+                  <span onClick={(e) => { e.stopPropagation(); handleClearAllCompanies(); }}
+                    className="p-0.5 rounded-full hover:bg-blue-100 text-blue-400 cursor-pointer">
                     <FaTimes className="w-2.5 h-2.5" />
                   </span>
                 )}
-                {isCompanyDropdownOpen ? (
-                  <FaChevronUp className="w-3 h-3 text-gray-400" />
-                ) : (
-                  <FaChevronDown className="w-3 h-3 text-gray-400" />
-                )}
+                {isCompanyDropdownOpen ? <FaChevronUp className="w-2.5 h-2.5 text-gray-400" /> : <FaChevronDown className="w-2.5 h-2.5 text-gray-400" />}
               </div>
             </button>
-
-            {/* Dropdown Menu Panel */}
             {isCompanyDropdownOpen && (
-              <div className="absolute left-0 right-0 sm:right-auto sm:w-80 mt-1.5 bg-white border border-gray-200 rounded-xl shadow-2xl z-50 p-2.5 space-y-2 animate-in fade-in">
-                {/* Search input inside dropdown */}
+              <div className="absolute left-0 right-0 sm:right-auto sm:w-80 mt-1.5 bg-white border border-gray-200 rounded-xl shadow-2xl z-50 p-2.5 space-y-2">
                 <div className="relative">
-                  <input
-                    type="text"
-                    value={companySearch}
-                    onChange={(e) => setCompanySearch(e.target.value)}
-                    placeholder="Search company..."
-                    className="w-full pl-7 pr-6 py-1.5 border border-gray-200 rounded-lg text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none"
-                    autoFocus
-                  />
+                  <input type="text" value={companySearch} onChange={(e) => setCompanySearch(e.target.value)}
+                    placeholder="Search company..." autoFocus
+                    className="w-full pl-7 pr-6 py-1.5 border border-gray-200 rounded-lg text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none" />
                   <FaSearch className="w-3 h-3 text-gray-400 absolute left-2.5 top-2.5" />
                   {companySearch && (
-                    <button
-                      type="button"
-                      onClick={() => setCompanySearch('')}
-                      className="absolute right-2 top-2 text-gray-400 hover:text-gray-600"
-                    >
+                    <button type="button" onClick={() => setCompanySearch('')} className="absolute right-2 top-2 text-gray-400 hover:text-gray-600">
                       <FaTimes className="w-2.5 h-2.5" />
                     </button>
                   )}
                 </div>
-
-                {/* Quick Selection Action Buttons */}
                 <div className="flex items-center justify-between text-[11px] pt-1 pb-1 border-b border-gray-100">
-                  <button
-                    type="button"
-                    onClick={handleSelectAllCompanies}
-                    className="text-blue-600 hover:text-blue-800 font-semibold cursor-pointer"
-                  >
-                    Select All ({companiesSource.length})
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleClearAllCompanies}
-                    disabled={selectedCompanies.length === 0}
-                    className="text-gray-500 hover:text-rose-600 font-medium disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
-                  >
-                    Clear Selection
-                  </button>
+                  <button type="button" onClick={handleSelectAllCompanies} className="text-blue-600 hover:text-blue-800 font-semibold cursor-pointer">Select All ({companiesSource.length})</button>
+                  <button type="button" onClick={handleClearAllCompanies} disabled={selectedCompanies.length === 0} className="text-gray-500 hover:text-rose-600 font-medium disabled:opacity-40 cursor-pointer">Clear</button>
                 </div>
-
-                {/* Scrollable Checkbox List */}
                 <div className="max-h-56 overflow-y-auto divide-y divide-gray-50 pr-1">
                   {filteredDropdownCompanies.length === 0 ? (
-                    <div className="py-6 text-center text-gray-400 text-xs">
-                      No matching company found
-                    </div>
+                    <div className="py-6 text-center text-gray-400 text-xs">No matching company found</div>
                   ) : (
                     filteredDropdownCompanies.map(comp => {
                       const isSelected = selectedCompanies.includes(comp);
                       return (
-                        <label
-                          key={comp}
-                          className={`flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg cursor-pointer text-xs transition ${
-                            isSelected ? 'bg-blue-50/80 text-blue-900 font-bold' : 'hover:bg-gray-50 text-gray-700'
-                          }`}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={isSelected}
-                            onChange={() => toggleCompany(comp)}
-                            className="w-3.5 h-3.5 rounded text-blue-600 border-gray-300 focus:ring-blue-500"
-                          />
+                        <label key={comp} className={`flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg cursor-pointer text-xs transition ${isSelected ? 'bg-blue-50/80 text-blue-900 font-bold' : 'hover:bg-gray-50 text-gray-700'}`}>
+                          <input type="checkbox" checked={isSelected} onChange={() => toggleCompany(comp)} className="w-3.5 h-3.5 rounded text-blue-600 border-gray-300 focus:ring-blue-500" />
                           <span className="truncate flex-1" title={comp}>{comp}</span>
                         </label>
                       );
                     })
                   )}
                 </div>
-
-                {/* Bottom Footer */}
                 <div className="pt-2 border-t border-gray-100 flex items-center justify-between text-[11px]">
-                  <span className="text-gray-500 font-medium">
-                    {selectedCompanies.length === 0
-                      ? 'All companies included'
-                      : `${selectedCompanies.length} of ${companiesSource.length} selected`}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setIsCompanyDropdownOpen(false)}
-                    className="px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded-md text-xs font-semibold cursor-pointer shadow-xs"
-                  >
-                    Done
-                  </button>
+                  <span className="text-gray-500">{selectedCompanies.length === 0 ? 'All companies included' : `${selectedCompanies.length} of ${companiesSource.length} selected`}</span>
+                  <button type="button" onClick={() => setIsCompanyDropdownOpen(false)} className="px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded-md text-xs font-semibold cursor-pointer">Done</button>
                 </div>
               </div>
             )}
           </div>
         </div>
 
-        {/* Second Filter Row: Search & Missing Rates Checkbox */}
-        <div className="mt-3 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-          <div className="relative flex-1 max-w-md">
+        {/* Row 3: Search + Params + Missing Badges */}
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3 px-5 py-3.5">
+          {/* Search */}
+          <div className="relative flex-1 max-w-sm">
+            <FaSearch className="w-3.5 h-3.5 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
             <input
               type="text"
               value={searchSku}
               onChange={(e) => setSearchSku(e.target.value)}
-              placeholder="Search by SKU Code or Original Product..."
-              className="w-full pl-9 pr-8 py-1.5 border border-gray-300 rounded-lg text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none"
+              placeholder="Search SKU or Product name…"
+              className="w-full pl-8 pr-7 py-1.5 border border-gray-200 rounded-lg text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none bg-gray-50 focus:bg-white transition"
             />
-            <FaSearch className="w-3.5 h-3.5 text-gray-400 absolute left-3 top-2.5" />
             {searchSku && (
-              <button
-                type="button"
-                onClick={() => setSearchSku('')}
-                className="absolute right-2.5 top-2 text-gray-400 hover:text-gray-600"
-              >
+              <button type="button" onClick={() => setSearchSku('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
                 <FaTimes className="w-3 h-3" />
               </button>
             )}
           </div>
 
-          <div className="flex items-center gap-3 flex-wrap">
-            {/* Print Charge Rate Setting */}
-            <div className="flex items-center gap-1.5 text-xs bg-gray-50 border border-gray-200 px-2.5 py-1.5 rounded-lg">
-              <span className="text-gray-600 font-semibold">Print:</span>
-              <span className="text-gray-400">₹</span>
+          {/* Separator */}
+          <div className="hidden sm:block w-px h-5 bg-gray-200" />
+
+          {/* Print Rate */}
+          <div className="flex items-center gap-1.5 text-xs">
+            <FaPrint className="w-3 h-3 text-gray-400" />
+            <span className="text-gray-500 font-semibold">Print:</span>
+            <div className="flex items-center border border-gray-200 rounded-lg bg-white overflow-hidden">
+              <span className="px-1.5 text-gray-400 text-[11px]">₹</span>
               <input
-                type="number"
-                step="0.1"
-                min="0"
-                value={printRate}
+                type="number" step="0.1" min="0" value={printRate}
                 onChange={(e) => setPrintRate(Math.max(0, Number(e.target.value) || 0))}
-                className="w-14 px-1 py-0.5 border border-gray-300 rounded text-xs font-bold text-gray-800 text-center focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
-                title="Print charge per dispatched piece (Default: ₹2.40)"
+                className="w-12 py-1.5 pr-1 text-xs font-bold text-gray-800 text-center focus:outline-none"
+                title="Print charge per dispatched piece"
               />
-              <span className="text-[11px] text-gray-400">/pc</span>
+              <span className="px-1.5 text-gray-400 text-[11px] border-l border-gray-200">/pc</span>
             </div>
+          </div>
 
-            {/* Customer Return % Setting */}
-            <div className="flex items-center gap-1.5 text-xs bg-gray-50 border border-gray-200 px-2.5 py-1.5 rounded-lg">
-              <span className="text-gray-600 font-semibold">Cust Ret:</span>
+          {/* Cust Return % */}
+          <div className="flex items-center gap-1.5 text-xs">
+            <FaUndo className="w-3 h-3 text-gray-400" />
+            <span className="text-gray-500 font-semibold">Cust Ret:</span>
+            <div className="flex items-center border border-gray-200 rounded-lg bg-white overflow-hidden">
               <input
-                type="number"
-                step="1"
-                min="0"
-                max="100"
-                value={custReturnPercent}
+                type="number" step="1" min="0" max="100" value={custReturnPercent}
                 onChange={(e) => setCustReturnPercent(Math.max(0, Math.min(100, Number(e.target.value) || 0)))}
-                className="w-12 px-1 py-0.5 border border-gray-300 rounded text-xs font-bold text-gray-800 text-center focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
-                title="Customer Return deduction percentage (Default: 85%)"
+                className="w-10 py-1.5 pl-2 text-xs font-bold text-gray-800 text-center focus:outline-none"
+                title="Customer Return deduction %"
               />
-              <span className="text-[11px] text-gray-400">%</span>
+              <span className="px-1.5 text-gray-400 text-[11px] border-l border-gray-200">%</span>
             </div>
+          </div>
 
-            <label className="flex items-center gap-2 cursor-pointer select-none text-xs font-semibold text-gray-700">
-              <input
-                type="checkbox"
-                checked={onlyMissingRates}
-                onChange={(e) => setOnlyMissingRates(e.target.checked)}
-                className="w-4 h-4 text-amber-600 rounded border-gray-300 focus:ring-amber-500"
-              />
-              <span className={onlyMissingRates ? 'text-amber-700 font-bold' : ''}>
-                Missing rates only
-              </span>
-            </label>
+          {/* Separator */}
+          <div className="hidden sm:block w-px h-5 bg-gray-200" />
 
-            {summary.missingRatesCount > 0 && (
-              <div className="flex items-center gap-1.5 flex-wrap">
-                <span
-                  onClick={() => {
-                    setActiveView('sku');
-                    setOnlyMissingRates(true);
-                  }}
-                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-50 text-amber-800 border border-amber-200 text-xs font-bold cursor-pointer hover:bg-amber-100 transition shadow-2xs"
-                  title="Click to view all SKUs needing rates and map them"
-                >
-                  <FaExclamationTriangle className="w-3 h-3 text-amber-600 animate-bounce" />
-                  <span>{summary.missingRatesCount} Missing</span>
-                </span>
-                {/* Download Missing Dropdown */}
-                <div className="relative" ref={missingTopDropdownRef}>
-                  <button
-                    type="button"
-                    onClick={() => setIsMissingTopDropdownOpen(prev => !prev)}
-                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white text-emerald-800 border border-emerald-300 text-xs font-bold hover:bg-emerald-50 transition shadow-2xs cursor-pointer"
-                    title="Download missing items in Master SKU or Master Rate format"
-                  >
-                    <FaDownload className="w-3 h-3 text-emerald-600" />
-                    <span>Download Missing (.xlsx)</span>
-                    <FaChevronDown className={`w-2.5 h-2.5 text-emerald-600 transition-transform ${isMissingTopDropdownOpen ? 'rotate-180' : ''}`} />
-                  </button>
+          {/* Missing rates toggle */}
+          <label className="flex items-center gap-2 cursor-pointer select-none text-xs font-semibold text-gray-600">
+            <input type="checkbox" checked={onlyMissingRates} onChange={(e) => setOnlyMissingRates(e.target.checked)} className="w-3.5 h-3.5 text-amber-500 rounded border-gray-300 focus:ring-amber-500" />
+            <span className={onlyMissingRates ? 'text-amber-700 font-bold' : ''}>Missing only</span>
+          </label>
 
-                  {isMissingTopDropdownOpen && (
-                    <div className="absolute right-0 mt-1.5 w-64 bg-white rounded-xl shadow-xl border border-gray-200 py-1.5 z-50 text-left animate-in fade-in zoom-in-95 duration-100">
-                      <div className="px-3 py-1.5 border-b border-gray-100 text-[10px] font-bold uppercase tracking-wider text-gray-500">
-                        Select Download Format
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          downloadMissingSkusExcel('sku');
-                          setIsMissingTopDropdownOpen(false);
-                        }}
-                        className="w-full px-3 py-2 text-left text-xs hover:bg-emerald-50 flex items-start gap-2.5 transition text-gray-800 cursor-pointer"
-                      >
-                        <div className="w-6 h-6 rounded-md bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0 mt-0.5 font-bold text-[10px]">
-                          SKU
-                        </div>
-                        <div>
-                          <div className="font-bold text-gray-900">Master SKU Format</div>
-                          <div className="text-[10px] text-gray-500">Columns: SKU, Origin, Size (Blanks for empty)</div>
-                        </div>
-                      </button>
+          {/* Missing rate badges */}
+          {summary.missingRatesCount > 0 && (
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <button
+                type="button"
+                onClick={() => { setActiveView('sku'); setOnlyMissingRates(true); }}
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-50 text-amber-800 border border-amber-200 text-xs font-bold cursor-pointer hover:bg-amber-100 transition"
+              >
+                <FaExclamationTriangle className="w-3 h-3 text-amber-500 animate-bounce" />
+                {summary.missingRatesCount} Missing
+              </button>
 
-                      <button
-                        type="button"
-                        onClick={() => {
-                          downloadMissingSkusExcel('rate');
-                          setIsMissingTopDropdownOpen(false);
-                        }}
-                        className="w-full px-3 py-2 text-left text-xs hover:bg-purple-50 flex items-start gap-2.5 transition text-gray-800 cursor-pointer"
-                      >
-                        <div className="w-6 h-6 rounded-md bg-purple-100 text-purple-700 flex items-center justify-center shrink-0 mt-0.5 font-bold text-[10px]">
-                          ₹
-                        </div>
-                        <div>
-                          <div className="font-bold text-gray-900">Master Rate Format</div>
-                          <div className="text-[10px] text-gray-500">Columns: original product name, Rate, dabbi rate, Size...</div>
-                        </div>
-                      </button>
-
-                      <div className="border-t border-gray-100 my-1"></div>
-
-                      <button
-                        type="button"
-                        onClick={() => {
-                          downloadMissingSkusExcel('both');
-                          setIsMissingTopDropdownOpen(false);
-                        }}
-                        className="w-full px-3 py-1.5 text-left text-xs hover:bg-blue-50 flex items-center gap-2 transition text-blue-700 font-semibold cursor-pointer"
-                      >
-                        <FaFileExcel className="w-3.5 h-3.5 text-blue-600" />
-                        <span>Combined (Both Sheets in 1 File)</span>
-                      </button>
-                    </div>
-                  )}
-                </div>
+              <div className="relative" ref={missingTopDropdownRef}>
                 <button
                   type="button"
-                  onClick={handleConfigureMissingSkusInMaster}
-                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold transition shadow-xs cursor-pointer"
-                  title="Download Excel file and go to Master SKU Catalog to upload or add"
+                  onClick={() => setIsMissingTopDropdownOpen(prev => !prev)}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white text-emerald-700 border border-emerald-200 text-xs font-semibold hover:bg-emerald-50 transition cursor-pointer"
                 >
-                  <FaFileExcel className="w-3 h-3" />
-                  <span>Configure in Master SKU ➔</span>
+                  <FaDownload className="w-3 h-3" />
+                  Download Missing
+                  <FaChevronDown className={`w-2.5 h-2.5 transition-transform ${isMissingTopDropdownOpen ? 'rotate-180' : ''}`} />
                 </button>
+                {isMissingTopDropdownOpen && (
+                  <div className="absolute right-0 mt-1.5 w-64 bg-white rounded-xl shadow-xl border border-gray-200 py-1.5 z-50 animate-in fade-in zoom-in-95 duration-100">
+                    <div className="px-3 py-1.5 border-b border-gray-100 text-[10px] font-bold uppercase tracking-wider text-gray-400">Download Format</div>
+                    <button type="button" onClick={() => { downloadMissingSkusExcel('sku'); setIsMissingTopDropdownOpen(false); }} className="w-full px-3 py-2 text-left text-xs hover:bg-emerald-50 flex items-start gap-2.5 cursor-pointer">
+                      <div className="w-6 h-6 rounded-md bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0 font-bold text-[10px]">SKU</div>
+                      <div><div className="font-bold text-gray-900">Master SKU Format</div><div className="text-[10px] text-gray-400">SKU, Origin, Size</div></div>
+                    </button>
+                    <button type="button" onClick={() => { downloadMissingSkusExcel('rate'); setIsMissingTopDropdownOpen(false); }} className="w-full px-3 py-2 text-left text-xs hover:bg-purple-50 flex items-start gap-2.5 cursor-pointer">
+                      <div className="w-6 h-6 rounded-md bg-purple-100 text-purple-700 flex items-center justify-center shrink-0 font-bold text-[10px]">₹</div>
+                      <div><div className="font-bold text-gray-900">Master Rate Format</div><div className="text-[10px] text-gray-400">Product name, Rate, Dabbi rate</div></div>
+                    </button>
+                    <div className="border-t border-gray-100 my-1" />
+                    <button type="button" onClick={() => { downloadMissingSkusExcel('both'); setIsMissingTopDropdownOpen(false); }} className="w-full px-3 py-1.5 text-left text-xs hover:bg-blue-50 flex items-center gap-2 text-blue-700 font-semibold cursor-pointer">
+                      <FaFileExcel className="w-3.5 h-3.5" />
+                      Combined (Both Sheets)
+                    </button>
+                  </div>
+                )}
               </div>
-            )}
-          </div>
+
+              <button
+                type="button"
+                onClick={handleConfigureMissingSkusInMaster}
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold transition cursor-pointer"
+              >
+                <FaFileExcel className="w-3 h-3" />
+                Configure in Master SKU →
+              </button>
+            </div>
+          )}
         </div>
 
-        {/* Selected Companies Tags */}
+        {/* Active Company Filter Tags */}
         {selectedCompanies.length > 0 && (
-          <div className="mt-3 pt-2.5 border-t border-gray-100 flex flex-wrap items-center gap-1.5 text-xs">
-            <span className="text-gray-500 text-[11px] font-semibold flex items-center gap-1 mr-1">
-              <FaFilter className="w-2.5 h-2.5 text-blue-600" />
-              Filtered by ({selectedCompanies.length}):
+          <div className="px-5 py-2.5 border-t border-gray-100 bg-blue-50/40 flex flex-wrap items-center gap-1.5">
+            <span className="text-[11px] font-semibold text-blue-600 flex items-center gap-1 mr-1">
+              <FaFilter className="w-2.5 h-2.5" />
+              Filtered:
             </span>
             {selectedCompanies.map(comp => (
-              <span
-                key={comp}
-                className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-blue-50 text-blue-800 border border-blue-200"
-              >
-                <span>{comp}</span>
-                <button
-                  type="button"
-                  onClick={() => removeCompany(comp)}
-                  className="hover:text-rose-600 p-0.5 cursor-pointer ml-0.5"
-                  title={`Remove ${comp}`}
-                >
+              <span key={comp} className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-white text-blue-800 border border-blue-200 shadow-sm">
+                {comp}
+                <button type="button" onClick={() => removeCompany(comp)} className="ml-0.5 hover:text-rose-600 cursor-pointer">
                   <FaTimes className="w-2.5 h-2.5" />
                 </button>
               </span>
             ))}
-            <button
-              type="button"
-              onClick={handleClearAllCompanies}
-              className="text-[11px] text-rose-600 hover:text-rose-800 font-semibold ml-2 hover:underline cursor-pointer"
-            >
-              Reset to All
-            </button>
+            <button type="button" onClick={handleClearAllCompanies} className="text-[11px] text-rose-500 hover:text-rose-700 font-semibold ml-1 hover:underline cursor-pointer">Reset</button>
           </div>
         )}
       </div>
 
-      {/* Executive KPI Summary Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3.5">
-        {/* Gross Dispatched */}
-        <div className="bg-gradient-to-br from-emerald-500/10 via-white to-emerald-500/5 rounded-2xl border border-emerald-200/80 p-4 shadow-xs">
-          <div className="flex items-center justify-between text-emerald-800 text-xs font-bold uppercase tracking-wider">
-            <span>Dispatched Goods</span>
-            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
+      {/* ── KPI SUMMARY CARDS ── */}
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+
+        {/* Dispatched Goods */}
+        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4 group hover:shadow-md hover:border-emerald-200 transition-all duration-200">
+          <div className="flex items-start justify-between mb-3">
+            <div className="w-8 h-8 rounded-xl bg-emerald-100 flex items-center justify-center">
+              <FaBoxOpen className="w-4 h-4 text-emerald-600" />
+            </div>
+            <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-100">Dispatched</span>
           </div>
-          <div className="text-xl sm:text-2xl font-black text-emerald-700 mt-2">
+          <div className="text-xl font-black text-gray-900 tracking-tight leading-none">
             {formatINR(summary.grossInventoryAmount || summary.inventoryAmount)}
           </div>
-          <div className="text-xs text-gray-500 mt-1 flex items-center justify-between font-medium">
-            <span>{formatQty(summary.inventoryQty)} Units</span>
-            <span className="text-[11px] text-emerald-600 font-semibold" title={`Goods: ${formatINR(summary.inventoryAmount)} + Print (${printRate}/pc): ${formatINR(summary.printCharge)}`}>
-              Rate+Dabbi{printRate > 0 ? ` (+₹${formatINR(summary.printCharge)})` : ''}
-            </span>
+          <div className="mt-2 flex items-center justify-between">
+            <span className="text-xs text-gray-500 font-medium">{formatQty(summary.inventoryQty)} units</span>
+            <span className="text-[11px] text-emerald-600 font-semibold">+₹{printRate}/pc print</span>
+          </div>
+          <div className="mt-2 h-1 bg-gray-100 rounded-full overflow-hidden">
+            <div className="h-full bg-gradient-to-r from-emerald-400 to-emerald-600 rounded-full" style={{width: '100%'}} />
           </div>
         </div>
 
         {/* Cancelled Orders */}
-        <div className="bg-gradient-to-br from-rose-500/10 via-white to-rose-500/5 rounded-2xl border border-rose-200/80 p-4 shadow-xs">
-          <div className="flex items-center justify-between text-rose-800 text-xs font-bold uppercase tracking-wider">
-            <span>Cancelled Orders</span>
-            <span className="w-2.5 h-2.5 rounded-full bg-rose-500"></span>
+        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4 group hover:shadow-md hover:border-rose-200 transition-all duration-200">
+          <div className="flex items-start justify-between mb-3">
+            <div className="w-8 h-8 rounded-xl bg-rose-100 flex items-center justify-center">
+              <FaTimes className="w-4 h-4 text-rose-600" />
+            </div>
+            <span className="text-[10px] font-bold uppercase tracking-wider text-rose-600 bg-rose-50 px-2 py-0.5 rounded-full border border-rose-100">Cancelled</span>
           </div>
-          <div className="text-xl sm:text-2xl font-black text-rose-700 mt-2">
+          <div className="text-xl font-black text-gray-900 tracking-tight leading-none">
             {formatINR(summary.cancelledAmount)}
           </div>
-          <div className="text-xs text-gray-500 mt-1 flex items-center justify-between font-medium">
-            <span>{formatQty(summary.cancelledQty)} Units</span>
-            <span className="text-[11px] text-rose-600 font-semibold">Rate + Dabbi Return</span>
+          <div className="mt-2 flex items-center justify-between">
+            <span className="text-xs text-gray-500 font-medium">{formatQty(summary.cancelledQty)} units</span>
+            <span className="text-[11px] text-rose-600 font-semibold">Rate+Dabbi Return</span>
+          </div>
+          <div className="mt-2 h-1 bg-gray-100 rounded-full overflow-hidden">
+            <div className="h-full bg-gradient-to-r from-rose-400 to-rose-600 rounded-full"
+              style={{width: summary.inventoryQty > 0 ? `${Math.min(100,(summary.cancelledQty/summary.inventoryQty)*100)}%` : '0%'}} />
           </div>
         </div>
 
-        {/* Courier Returns */}
-        <div className="bg-gradient-to-br from-amber-500/10 via-white to-amber-500/5 rounded-2xl border border-amber-200/80 p-4 shadow-xs">
-          <div className="flex items-center justify-between text-amber-800 text-xs font-bold uppercase tracking-wider">
-            <span>Courier Returns (RTO)</span>
-            <span className="w-2.5 h-2.5 rounded-full bg-amber-500"></span>
+        {/* Courier Returns (RTO) */}
+        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4 group hover:shadow-md hover:border-amber-200 transition-all duration-200">
+          <div className="flex items-start justify-between mb-3">
+            <div className="w-8 h-8 rounded-xl bg-amber-100 flex items-center justify-center">
+              <FaUndo className="w-3.5 h-3.5 text-amber-600" />
+            </div>
+            <span className="text-[10px] font-bold uppercase tracking-wider text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-100">RTO</span>
           </div>
-          <div className="text-xl sm:text-2xl font-black text-amber-700 mt-2">
+          <div className="text-xl font-black text-gray-900 tracking-tight leading-none">
             {formatINR(summary.returnsAmount)}
           </div>
-          <div className="text-xs text-gray-500 mt-1 flex items-center justify-between font-medium">
-            <span>{formatQty(summary.returnsQty)} Units</span>
+          <div className="mt-2 flex items-center justify-between">
+            <span className="text-xs text-gray-500 font-medium">{formatQty(summary.returnsQty)} units</span>
             <span className="text-[11px] text-amber-600 font-semibold">100% Ret Rate</span>
+          </div>
+          <div className="mt-2 h-1 bg-gray-100 rounded-full overflow-hidden">
+            <div className="h-full bg-gradient-to-r from-amber-400 to-amber-600 rounded-full"
+              style={{width: summary.inventoryQty > 0 ? `${Math.min(100,(summary.returnsQty/summary.inventoryQty)*100)}%` : '0%'}} />
           </div>
         </div>
 
         {/* Customer Returns */}
-        <div className="bg-gradient-to-br from-purple-500/10 via-white to-purple-500/5 rounded-2xl border border-purple-200/80 p-4 shadow-xs">
-          <div className="flex items-center justify-between text-purple-800 text-xs font-bold uppercase tracking-wider">
-            <span>Customer Returns</span>
-            <span className="w-2.5 h-2.5 rounded-full bg-purple-500"></span>
+        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4 group hover:shadow-md hover:border-purple-200 transition-all duration-200">
+          <div className="flex items-start justify-between mb-3">
+            <div className="w-8 h-8 rounded-xl bg-purple-100 flex items-center justify-center">
+              <FaArrowRight className="w-3.5 h-3.5 text-purple-600 rotate-180" />
+            </div>
+            <span className="text-[10px] font-bold uppercase tracking-wider text-purple-600 bg-purple-50 px-2 py-0.5 rounded-full border border-purple-100">Cust. Ret</span>
           </div>
-          <div className="text-xl sm:text-2xl font-black text-purple-700 mt-2">
+          <div className="text-xl font-black text-gray-900 tracking-tight leading-none">
             {formatINR(summary.customerReturnsAmount)}
           </div>
-          <div className="text-xs text-gray-500 mt-1 flex items-center justify-between font-medium">
-            <span>{formatQty(summary.customerReturnsQty)} Units</span>
-            <span className="text-[11px] text-purple-600 font-bold" title={`Full 100% was ${formatINR(summary.rawCustomerReturnsAmount)}`}>
-              {custReturnPercent}% Policy
-            </span>
+          <div className="mt-2 flex items-center justify-between">
+            <span className="text-xs text-gray-500 font-medium">{formatQty(summary.customerReturnsQty)} units</span>
+            <span className="text-[11px] text-purple-600 font-bold" title={`Full 100% = ${formatINR(summary.rawCustomerReturnsAmount)}`}>{custReturnPercent}% Policy</span>
+          </div>
+          <div className="mt-2 h-1 bg-gray-100 rounded-full overflow-hidden">
+            <div className="h-full bg-gradient-to-r from-purple-400 to-purple-600 rounded-full"
+              style={{width: summary.inventoryQty > 0 ? `${Math.min(100,(summary.customerReturnsQty/summary.inventoryQty)*100)}%` : '0%'}} />
           </div>
         </div>
 
-        {/* Net Revenue */}
-        <div className="bg-gradient-to-br from-blue-600 to-indigo-700 rounded-2xl p-4 shadow-md text-white">
-          <div className="flex items-center justify-between text-blue-100 text-xs font-bold uppercase tracking-wider">
-            <span>Net Billable Revenue</span>
-            <span className="text-[11px] bg-white/20 px-2 py-0.5 rounded-full font-bold">
-              {overallReturnRate}% Ret
-            </span>
-          </div>
-          <div className="text-xl sm:text-2xl font-black text-white mt-2">
-            {formatINR(summary.netAmount)}
-          </div>
-          <div className="text-xs text-blue-100 mt-1 flex items-center justify-between">
-            <span>{formatQty(summary.netQty)} Net Units</span>
-            <span className="text-[11px] text-emerald-300 font-semibold">Post Deductions</span>
+        {/* Net Revenue — Highlighted */}
+        <div className="col-span-2 lg:col-span-1 bg-gradient-to-br from-blue-600 via-blue-700 to-indigo-800 rounded-2xl p-4 shadow-md shadow-blue-500/20 text-white relative overflow-hidden">
+          {/* Background decoration */}
+          <div className="absolute top-0 right-0 w-24 h-24 bg-white/5 rounded-full -translate-y-8 translate-x-8" />
+          <div className="absolute bottom-0 left-0 w-16 h-16 bg-white/5 rounded-full translate-y-6 -translate-x-6" />
+          <div className="relative">
+            <div className="flex items-start justify-between mb-3">
+              <div className="w-8 h-8 rounded-xl bg-white/20 flex items-center justify-center">
+                <FaMoneyBillWave className="w-4 h-4 text-white" />
+              </div>
+              <span className="text-[10px] font-bold uppercase tracking-wider bg-emerald-400/20 text-emerald-300 px-2 py-0.5 rounded-full border border-emerald-400/30">
+                {overallReturnRate}% Ret
+              </span>
+            </div>
+            <div className="text-[10px] font-semibold text-blue-200 uppercase tracking-wider mb-1">Net Billable Revenue</div>
+            <div className="text-2xl font-black text-white tracking-tight leading-none">
+              {formatINR(summary.netAmount)}
+            </div>
+            <div className="mt-2 flex items-center justify-between">
+              <span className="text-xs text-blue-200 font-medium">{formatQty(summary.netQty)} net units</span>
+              <span className="text-[11px] text-emerald-300 font-bold">Post Deductions</span>
+            </div>
           </div>
         </div>
+
       </div>
 
       {/* View Switcher Tabs */}
@@ -2638,6 +2548,42 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
                       </div>
                       <span className="text-[9px] text-gray-400 block">Return box charge</span>
                     </div>
+                  </div>
+
+                  {/* Dabbi Selection / Dropdown */}
+                  <div className="bg-purple-50/50 p-2.5 rounded-xl border border-purple-100">
+                    <DabbiSelect
+                      company={selectedCompanies?.length === 1 ? selectedCompanies[0] : undefined}
+                      value={quickMapModal.dabbi || ''}
+                      selectedName={quickMapModal.dabbiName}
+                      boxRate={quickMapModal.boxRate}
+                      boxReturnRate={quickMapModal.boxReturnRate}
+                      size={quickMapModal.size}
+                      onChange={(selectedDabbi, isCustom) => {
+                        if (selectedDabbi) {
+                          setQuickMapModal(prev => ({
+                            ...prev,
+                            dabbi: selectedDabbi._id,
+                            dabbiName: selectedDabbi.name,
+                            boxRate: selectedDabbi.boxRate != null ? selectedDabbi.boxRate : prev.boxRate,
+                            boxReturnRate: selectedDabbi.boxReturnRate != null ? selectedDabbi.boxReturnRate : prev.boxReturnRate,
+                            size: selectedDabbi.size && !prev.size ? selectedDabbi.size : prev.size
+                          }));
+                        } else if (isCustom) {
+                          setQuickMapModal(prev => ({
+                            ...prev,
+                            dabbi: null,
+                            dabbiName: 'Custom'
+                          }));
+                        } else {
+                          setQuickMapModal(prev => ({
+                            ...prev,
+                            dabbi: null,
+                            dabbiName: ''
+                          }));
+                        }
+                      }}
+                    />
                   </div>
 
                   {/* Live Formula Preview */}

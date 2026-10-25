@@ -87,6 +87,8 @@ async function handler(req, res) {
             updatedAt: now
           };
           if (newImageLink) setFields.imageLink = newImageLink;
+          if (item.dabbi) setFields.dabbi = item.dabbi;
+          if (item.dabbiName) setFields.dabbiName = item.dabbiName;
 
           const updateDoc = { $set: setFields };
 
@@ -123,6 +125,8 @@ async function handler(req, res) {
             updatedAt: now
           };
           if (newImageLink) setFields.imageLink = newImageLink;
+          if (item.dabbi) setFields.dabbi = item.dabbi;
+          if (item.dabbiName) setFields.dabbiName = item.dabbiName;
 
           bulkOps.push({
             updateOne: {
