@@ -30,6 +30,16 @@ const MasterRateSchema = new mongoose.Schema({
     type: Number,
     default: 0,
   },
+  dabbi: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Dabbi',
+    default: null,
+  },
+  dabbiName: {
+    type: String,
+    default: '',
+    trim: true,
+  },
   size: {
     type: String,
     default: '',

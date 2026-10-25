@@ -27,6 +27,8 @@ async function handler(req, res) {
       itemRate,
       boxRate,
       boxReturnRate,
+      dabbi = null,
+      dabbiName = '',
       imageLink = '',
       effectiveFromDate,
       isCorrection = true, // Default to correction so rates apply to current billing period immediately
@@ -125,6 +127,8 @@ async function handler(req, res) {
         itemRate: finalItemRate,
         boxRate: finalBoxRate,
         boxReturnRate: finalBoxReturnRate,
+        dabbi: dabbi || null,
+        dabbiName: (dabbiName || '').trim(),
         size: trimmedSize,
         imageLink: cleanImageLink,
         rateHistory: [
@@ -237,6 +241,8 @@ async function handler(req, res) {
         existingRate.itemRate = targetItemRate;
         existingRate.boxRate = targetBoxRate;
         existingRate.boxReturnRate = targetBoxReturnRate;
+        if (dabbi !== undefined) existingRate.dabbi = dabbi || null;
+        if (dabbiName !== undefined) existingRate.dabbiName = (dabbiName || '').trim();
         existingRate.lastModifiedBy = user._id;
         existingRate.lastModifiedByName = user.name || user.username || 'User';
 

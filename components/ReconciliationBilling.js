@@ -33,6 +33,7 @@ import {
   FaPlus,
   FaDownload
 } from 'react-icons/fa';
+import DabbiSelect from './DabbiSelect';
 
 export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateToMasterSku }) {
   const router = useRouter();
@@ -84,6 +85,8 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
     itemRate: '',
     boxRate: '2.40',
     boxReturnRate: '2.40',
+    dabbi: null,
+    dabbiName: '',
     imageLink: '',
     effectiveFromDate: '',
     isCorrection: true,
@@ -275,6 +278,8 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
       boxReturnRate: s.boxReturnRate != null && s.boxReturnRate > 0 
         ? s.boxReturnRate 
         : (matchedRate?.boxReturnRate != null ? matchedRate.boxReturnRate : (printRate || 2.40)),
+      dabbi: matchedRate?.dabbi || null,
+      dabbiName: matchedRate?.dabbiName || '',
       imageLink: s.imageLink || (matchedRate?.imageLink) || '',
       effectiveFromDate: startDate || moment().format('YYYY-MM-DD'),
       isCorrection: true,
@@ -294,6 +299,8 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
       itemRate: matched?.itemRate !== undefined ? matched.itemRate : prev.itemRate,
       boxRate: matched?.boxRate !== undefined ? matched.boxRate : prev.boxRate,
       boxReturnRate: matched?.boxReturnRate !== undefined ? matched.boxReturnRate : prev.boxReturnRate,
+      dabbi: matched?.dabbi !== undefined ? matched.dabbi : prev.dabbi,
+      dabbiName: matched?.dabbiName !== undefined ? matched.dabbiName : prev.dabbiName,
       imageLink: matched?.imageLink !== undefined ? matched.imageLink : prev.imageLink,
     }));
   };
@@ -320,6 +327,8 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
         itemRate: quickMapModal.itemRate !== '' ? Number(quickMapModal.itemRate) : 0,
         boxRate: quickMapModal.boxRate !== '' ? Number(quickMapModal.boxRate) : 2.40,
         boxReturnRate: quickMapModal.boxReturnRate !== '' ? Number(quickMapModal.boxReturnRate) : 2.40,
+        dabbi: quickMapModal.dabbi || null,
+        dabbiName: quickMapModal.dabbiName || '',
         imageLink: quickMapModal.imageLink?.trim() || '',
         effectiveFromDate: quickMapModal.effectiveFromDate || undefined,
         isCorrection: quickMapModal.isCorrection,
@@ -2638,6 +2647,42 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
                       </div>
                       <span className="text-[9px] text-gray-400 block">Return box charge</span>
                     </div>
+                  </div>
+
+                  {/* Dabbi Selection / Dropdown */}
+                  <div className="bg-purple-50/50 p-2.5 rounded-xl border border-purple-100">
+                    <DabbiSelect
+                      company={selectedCompanies?.length === 1 ? selectedCompanies[0] : undefined}
+                      value={quickMapModal.dabbi || ''}
+                      selectedName={quickMapModal.dabbiName}
+                      boxRate={quickMapModal.boxRate}
+                      boxReturnRate={quickMapModal.boxReturnRate}
+                      size={quickMapModal.size}
+                      onChange={(selectedDabbi, isCustom) => {
+                        if (selectedDabbi) {
+                          setQuickMapModal(prev => ({
+                            ...prev,
+                            dabbi: selectedDabbi._id,
+                            dabbiName: selectedDabbi.name,
+                            boxRate: selectedDabbi.boxRate != null ? selectedDabbi.boxRate : prev.boxRate,
+                            boxReturnRate: selectedDabbi.boxReturnRate != null ? selectedDabbi.boxReturnRate : prev.boxReturnRate,
+                            size: selectedDabbi.size && !prev.size ? selectedDabbi.size : prev.size
+                          }));
+                        } else if (isCustom) {
+                          setQuickMapModal(prev => ({
+                            ...prev,
+                            dabbi: null,
+                            dabbiName: 'Custom'
+                          }));
+                        } else {
+                          setQuickMapModal(prev => ({
+                            ...prev,
+                            dabbi: null,
+                            dabbiName: ''
+                          }));
+                        }
+                      }}
+                    />
                   </div>
 
                   {/* Live Formula Preview */}

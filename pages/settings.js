@@ -6,6 +6,7 @@ import WorkerDetails from '../components/WorkerDetails';
 import PartyDashboard from './party_dashboard';
 import PartyDetails from '../components/partyDetails';
 import CompanyInvoicesList from '../components/CompanyInvoicesList';
+import DabbiManager from '../components/DabbiManager';
 import { checkPermission, PERMISSIONS, USER_ROLES } from '../lib/constants';
 import axios from 'axios';
 
@@ -147,6 +148,15 @@ const SettingsTabs = () => {
                 Invoices & Billing
               </button>
             )}
+            {(user?.role === USER_ROLES.ADMIN || user?.role === USER_ROLES.ADMINISTRATOR) && (
+              <button
+                onClick={() => setSelectedTab('dabbi')}
+                className={`px-4 py-2 rounded font-medium transition ${
+                  selectedTab === 'dabbi' ? 'bg-purple-600 text-white shadow-sm' : 'bg-gray-200 text-black hover:bg-gray-300'
+                }`}>
+                📦 Dabbi Rates
+              </button>
+            )}
           </div>
           <div className="mt-4">
             {selectedTab === 'sections' && (
@@ -281,6 +291,11 @@ const SettingsTabs = () => {
             {selectedTab === 'invoices' && (user?.role === USER_ROLES.ADMIN || user?.role === USER_ROLES.ADMINISTRATOR) && (
               <div className="mt-4">
                 <CompanyInvoicesList />
+              </div>
+            )}
+            {selectedTab === 'dabbi' && (user?.role === USER_ROLES.ADMIN || user?.role === USER_ROLES.ADMINISTRATOR) && (
+              <div className="mt-4">
+                <DabbiManager />
               </div>
             )}
           </div>

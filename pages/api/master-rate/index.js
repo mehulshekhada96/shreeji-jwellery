@@ -27,7 +27,7 @@ async function handler(req, res) {
       // Fast query to load all master rates (used for lookups or export)
       if (all === 'true') {
         const rates = await MasterRate.find({ company: companyId })
-          .select('origin imageLink itemRate boxRate boxReturnRate size rateHistory')
+          .select('origin imageLink itemRate boxRate boxReturnRate dabbi dabbiName size rateHistory')
           .lean();
         return res.status(200).json({ success: true, count: rates.length, rates });
       }
@@ -108,7 +108,7 @@ async function handler(req, res) {
   if (method === 'POST') {
     try {
       await connectToDatabase();
-      const { origin, imageLink = '', itemRate = 0, boxRate = 0, boxReturnRate = 0, size = '' } = req.body;
+      const { origin, imageLink = '', itemRate = 0, boxRate = 0, boxReturnRate = 0, dabbi = null, dabbiName = '', size = '' } = req.body;
 
       if (!origin || !origin.trim()) {
         return res.status(400).json({ message: 'Original Product Name is required' });
@@ -138,6 +138,8 @@ async function handler(req, res) {
         itemRate: numItemRate,
         boxRate: numBoxRate,
         boxReturnRate: numBoxReturnRate,
+        dabbi: dabbi || null,
+        dabbiName: (dabbiName || '').trim(),
         size: cleanSize,
         lastModifiedBy: user._id,
         lastModifiedByName: user.name || user.username || 'User'
@@ -180,6 +182,8 @@ async function handler(req, res) {
         itemRate,
         boxRate,
         boxReturnRate,
+        dabbi,
+        dabbiName,
         size,
         effectiveFromDate,
         isCorrection = false,
@@ -221,6 +225,8 @@ async function handler(req, res) {
 
       if (imageLink !== undefined) existing.imageLink = (imageLink || '').trim();
       if (size !== undefined) existing.size = (size || '').trim();
+      if (dabbi !== undefined) existing.dabbi = dabbi || null;
+      if (dabbiName !== undefined) existing.dabbiName = (dabbiName || '').trim();
 
       const newItemRate = itemRate !== undefined ? (Number(itemRate) || 0) : oldItemRate;
       const newBoxRate = boxRate !== undefined ? (Number(boxRate) || 0) : oldBoxRate;
