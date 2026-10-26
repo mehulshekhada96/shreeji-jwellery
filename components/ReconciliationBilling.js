@@ -675,6 +675,28 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
     });
   }, [billingData.skuWise, onlyMissingRates, skuSort, searchSku, appliedReturnMin, appliedReturnMax]);
 
+  // SKU Pagination state for ultra-fast DOM rendering on large datasets (e.g. 6 months / 8,000+ SKUs)
+  const [skuPage, setSkuPage] = useState(1);
+  const [skuPageSize, setSkuPageSize] = useState(50);
+
+  // Reset to page 1 whenever filters change
+  useEffect(() => {
+    setSkuPage(1);
+  }, [searchSku, onlyMissingRates, skuSort, appliedReturnMin, appliedReturnMax, selectedCompanies]);
+
+  const totalSkuPages = useMemo(() => {
+    if (skuPageSize === 'all') return 1;
+    const size = Number(skuPageSize) || 50;
+    return Math.max(1, Math.ceil(displayedSkus.length / size));
+  }, [displayedSkus.length, skuPageSize]);
+
+  const paginatedSkus = useMemo(() => {
+    if (skuPageSize === 'all') return displayedSkus;
+    const size = Number(skuPageSize) || 50;
+    const start = (skuPage - 1) * size;
+    return displayedSkus.slice(start, start + size);
+  }, [displayedSkus, skuPage, skuPageSize]);
+
   // Sorted Companies with search support
   const displayedCompanies = useMemo(() => {
     let list = billingData.companyWise || [];
@@ -1905,8 +1927,30 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
                       <span>💰 Highest Net Total</span>
                     </button>
                   </div>
-                  <div className="text-[11px] text-gray-500 font-medium">
-                    Click any column header to sort (↑ / ↓)
+                  <div className="flex items-center gap-3">
+                    <div className="text-[11px] text-gray-500 font-medium hidden md:block">
+                      Click any column header to sort (↑ / ↓)
+                    </div>
+                    {/* Rows per page selector */}
+                    <div className="flex items-center gap-1.5 text-xs text-gray-600 bg-white border border-gray-200 rounded-lg px-2.5 py-1 shadow-2xs">
+                      <span className="text-[11px] text-gray-500 font-medium">Show:</span>
+                      <select
+                        value={skuPageSize}
+                        onChange={(e) => {
+                          const val = e.target.value === 'all' ? 'all' : Number(e.target.value);
+                          setSkuPageSize(val);
+                          setSkuPage(1);
+                        }}
+                        className="text-xs font-bold text-gray-800 bg-transparent border-0 outline-none cursor-pointer"
+                      >
+                        <option value={25}>25</option>
+                        <option value={50}>50</option>
+                        <option value={100}>100</option>
+                        <option value={250}>250</option>
+                        <option value="all">All ({displayedSkus.length})</option>
+                      </select>
+                      <span className="text-[11px] text-gray-400">/ page</span>
+                    </div>
                   </div>
                 </div>
 
@@ -2063,7 +2107,7 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
                         </td>
                       </tr>
                     ) : (
-                      displayedSkus.map(s => (
+                      paginatedSkus.map(s => (
                         <tr key={s.sku} className="hover:bg-gray-50/80 transition-colors">
                           {/* SKU & Product info */}
                           <td className="px-4 py-3.5">
@@ -2280,6 +2324,73 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
                     </tfoot>
                   )}
                 </table>
+
+                {/* SKU Pagination Footer */}
+                {displayedSkus.length > 0 && skuPageSize !== 'all' && totalSkuPages > 1 && (
+                  <div className="p-4 border-t border-gray-200 bg-white flex flex-col sm:flex-row items-center justify-between gap-3 text-xs select-none">
+                    <div className="text-gray-600 font-medium">
+                      Showing <span className="font-bold text-gray-900">{(skuPage - 1) * Number(skuPageSize) + 1}</span> to{' '}
+                      <span className="font-bold text-gray-900">{Math.min(skuPage * Number(skuPageSize), displayedSkus.length)}</span> of{' '}
+                      <span className="font-bold text-gray-900">{displayedSkus.length.toLocaleString('en-IN')}</span> SKUs
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setSkuPage(1)}
+                        disabled={skuPage === 1}
+                        className="px-2.5 py-1.5 rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-50 disabled:opacity-30 disabled:cursor-not-allowed font-semibold transition cursor-pointer text-xs"
+                        title="First Page"
+                      >
+                        « First
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSkuPage(prev => Math.max(1, prev - 1))}
+                        disabled={skuPage === 1}
+                        className="px-2.5 py-1.5 rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-50 disabled:opacity-30 disabled:cursor-not-allowed font-semibold transition cursor-pointer text-xs"
+                        title="Previous Page"
+                      >
+                        ‹ Prev
+                      </button>
+
+                      <div className="flex items-center gap-1.5 px-2 font-bold text-gray-800 text-xs">
+                        <span>Page</span>
+                        <input
+                          type="number"
+                          min="1"
+                          max={totalSkuPages}
+                          value={skuPage}
+                          onChange={(e) => {
+                            const p = Number(e.target.value);
+                            if (p >= 1 && p <= totalSkuPages) setSkuPage(p);
+                          }}
+                          className="w-12 text-center py-1 border border-gray-300 rounded font-bold text-indigo-700 bg-gray-50 focus:bg-white outline-none"
+                        />
+                        <span>of {totalSkuPages}</span>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => setSkuPage(prev => Math.min(totalSkuPages, prev + 1))}
+                        disabled={skuPage === totalSkuPages}
+                        className="px-2.5 py-1.5 rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-50 disabled:opacity-30 disabled:cursor-not-allowed font-semibold transition cursor-pointer text-xs"
+                        title="Next Page"
+                      >
+                        Next ›
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSkuPage(totalSkuPages)}
+                        disabled={skuPage === totalSkuPages}
+                        className="px-2.5 py-1.5 rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-50 disabled:opacity-30 disabled:cursor-not-allowed font-semibold transition cursor-pointer text-xs"
+                        title="Last Page"
+                      >
+                        Last »
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </>

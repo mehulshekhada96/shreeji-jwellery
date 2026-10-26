@@ -141,12 +141,12 @@ async function handler(req, res) {
 
     // 2. Query all 6 streams in parallel in a single database round-trip
     const [invRows, cancelRows, returnRows, custReturnRows, masterSkuDocs, masterRateDocs] = await Promise.all([
-      SkuInventory.find(invMatch).select('companyName sku quantity selectedDate').lean(),
-      CancelledOrder.find(cancelMatch).select('companyName sku quantity startDate selectedDate').lean(),
-      ReturnOrder.find(returnMatch).select('companyName sku quantity startDate selectedDate').lean(),
-      CustomerReturnOrder.find(custReturnMatch).select('companyName sku quantity startDate selectedDate').lean(),
-      MasterSku.find({ company: companyId }).select('sku origin size').lean(),
-      MasterRate.find({ company: companyId }).select('origin imageLink itemRate boxRate boxReturnRate size rateHistory').lean()
+      SkuInventory.find(invMatch).select('companyName sku quantity selectedDate -_id').lean(),
+      CancelledOrder.find(cancelMatch).select('companyName sku quantity startDate selectedDate -_id').lean(),
+      ReturnOrder.find(returnMatch).select('companyName sku quantity startDate selectedDate -_id').lean(),
+      CustomerReturnOrder.find(custReturnMatch).select('companyName sku quantity startDate selectedDate -_id').lean(),
+      MasterSku.find({ company: companyId }).select('sku origin size -_id').lean(),
+      MasterRate.find({ company: companyId }).select('origin imageLink itemRate boxRate boxReturnRate size rateHistory -_id').lean()
     ]);
 
     // 3. Build in-memory lookup maps for instant O(1) resolution
