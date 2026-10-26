@@ -59,6 +59,10 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
   const [searchSku, setSearchSku] = useState('');
   const [platform, setPlatform] = useState('meesho');
   const [onlyMissingRates, setOnlyMissingRates] = useState(false);
+  const [custReturnMinInput, setCustReturnMinInput] = useState('');
+  const [custReturnMaxInput, setCustReturnMaxInput] = useState('');
+  const [appliedReturnMin, setAppliedReturnMin] = useState('');
+  const [appliedReturnMax, setAppliedReturnMax] = useState('');
 
   // Standard Reconciliation Parameters
   const [printRate, setPrintRate] = useState(2.40);
@@ -516,6 +520,23 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
     }
   };
 
+  // Customer Return % distribution counts across all SKUs
+  const custReturnCounts = useMemo(() => {
+    const list = billingData.skuWise || [];
+    const counts = { all: list.length, '0-5': 0, '5-10': 0, '10-20': 0, '20-30': 0, '30+': 0 };
+    list.forEach(item => {
+      const invQty = Number(item.inventoryQty) || 0;
+      const custRetQty = Number(item.customerReturnsQty) || 0;
+      const p = invQty > 0 ? (custRetQty / invQty) * 100 : (custRetQty > 0 ? 100 : 0);
+      if (p <= 5) counts['0-5']++;
+      else if (p <= 10) counts['5-10']++;
+      else if (p <= 20) counts['10-20']++;
+      else if (p <= 30) counts['20-30']++;
+      else counts['30+']++;
+    });
+    return counts;
+  }, [billingData.skuWise]);
+
   // Filtered and sorted SKUs with instant real-time client-side search & percentages
   const displayedSkus = useMemo(() => {
     let list = billingData.skuWise || [];
@@ -539,8 +560,8 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
 
       const cancelPercent = invQty > 0 ? (cancelQty / invQty) * 100 : 0;
       const returnPercent = invQty > 0 ? (retQty / invQty) * 100 : 0;
-      const custReturnPercent = invQty > 0 ? (custRetQty / invQty) * 100 : 0;
-      const totalReturnPercent = invQty > 0 ? (itemTotalRetQty / invQty) * 100 : 0;
+      const custReturnPercent = invQty > 0 ? (custRetQty / invQty) * 100 : (custRetQty > 0 ? 100 : 0);
+      const totalReturnPercent = invQty > 0 ? (itemTotalRetQty / invQty) * 100 : (itemTotalRetQty > 0 ? 100 : 0);
 
       return {
         ...item,
@@ -553,8 +574,22 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
       };
     });
 
+    // Apply Customer Return % range filter (Start % to End %)
+    let filtered = withPercentages;
+    const hasMin = appliedReturnMin !== '' && !isNaN(Number(appliedReturnMin));
+    const hasMax = appliedReturnMax !== '' && !isNaN(Number(appliedReturnMax));
+
+    if (hasMin || hasMax) {
+      const minVal = hasMin ? Number(appliedReturnMin) : -Infinity;
+      const maxVal = hasMax ? Number(appliedReturnMax) : Infinity;
+      filtered = filtered.filter(item => {
+        const p = item.custReturnPercent || 0;
+        return p >= minVal && p <= maxVal;
+      });
+    }
+
     const { field, order } = skuSort;
-    return withPercentages.sort((a, b) => {
+    return filtered.sort((a, b) => {
       const valA = a[field] ?? 0;
       const valB = b[field] ?? 0;
       if (typeof valA === 'string') {
@@ -562,7 +597,7 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
       }
       return order === 'asc' ? valA - valB : valB - valA;
     });
-  }, [billingData.skuWise, onlyMissingRates, skuSort, searchSku]);
+  }, [billingData.skuWise, onlyMissingRates, skuSort, searchSku, appliedReturnMin, appliedReturnMax]);
 
   // Sorted Companies with search support
   const displayedCompanies = useMemo(() => {
@@ -1584,8 +1619,143 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
                     </div>
                   </div>
                 )}
+                {/* Customer Return % Range Filter Bar (Custom Inputs + Presets) */}
+                <div className="px-4 py-2.5 bg-purple-50/50 border-y border-purple-100 flex flex-wrap items-center justify-between gap-3 text-xs">
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <span className="text-purple-900 font-bold flex items-center gap-1.5 text-[11px] uppercase tracking-wider">
+                      <FaFilter className="w-3 h-3 text-purple-600" />
+                      <span>Cust Ret % Filter:</span>
+                    </span>
+
+                    {/* Custom Percentage Range Inputs: From [ ]% to [ ]% + Apply Button */}
+                    <div className="flex items-center gap-2 bg-white border border-purple-200 rounded-lg px-2.5 py-1 shadow-2xs">
+                      <span className="text-[11px] font-semibold text-gray-500">From:</span>
+                      <div className="flex items-center border border-gray-200 rounded px-1.5 py-0.5 bg-gray-50 focus-within:bg-white focus-within:border-purple-500 transition">
+                        <input
+                          type="number"
+                          step="0.5"
+                          min="0"
+                          max="100"
+                          placeholder="0"
+                          value={custReturnMinInput}
+                          onChange={(e) => setCustReturnMinInput(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              setAppliedReturnMin(custReturnMinInput.trim());
+                              setAppliedReturnMax(custReturnMaxInput.trim());
+                            }
+                          }}
+                          className="w-12 text-xs font-bold text-gray-800 text-center focus:outline-none bg-transparent"
+                          title="Start percentage (Min %)"
+                        />
+                        <span className="text-[10px] text-gray-400 font-bold ml-0.5">%</span>
+                      </div>
+
+                      <span className="text-[11px] font-semibold text-gray-500">To:</span>
+                      <div className="flex items-center border border-gray-200 rounded px-1.5 py-0.5 bg-gray-50 focus-within:bg-white focus-within:border-purple-500 transition">
+                        <input
+                          type="number"
+                          step="0.5"
+                          min="0"
+                          max="100"
+                          placeholder="100"
+                          value={custReturnMaxInput}
+                          onChange={(e) => setCustReturnMaxInput(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              setAppliedReturnMin(custReturnMinInput.trim());
+                              setAppliedReturnMax(custReturnMaxInput.trim());
+                            }
+                          }}
+                          className="w-12 text-xs font-bold text-gray-800 text-center focus:outline-none bg-transparent"
+                          title="End percentage (Max %)"
+                        />
+                        <span className="text-[10px] text-gray-400 font-bold ml-0.5">%</span>
+                      </div>
+
+                      {/* Apply Button */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAppliedReturnMin(custReturnMinInput.trim());
+                          setAppliedReturnMax(custReturnMaxInput.trim());
+                        }}
+                        className="px-2.5 py-1 bg-purple-600 hover:bg-purple-700 text-white rounded font-bold text-[11px] shadow-2xs transition cursor-pointer flex items-center gap-1"
+                        title="Click to apply percentage filter (or press Enter)"
+                      >
+                        <FaFilter className="w-2.5 h-2.5" />
+                        <span>Apply</span>
+                      </button>
+
+                      {/* Clear Button */}
+                      {(appliedReturnMin !== '' || appliedReturnMax !== '' || custReturnMinInput !== '' || custReturnMaxInput !== '') && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCustReturnMinInput('');
+                            setCustReturnMaxInput('');
+                            setAppliedReturnMin('');
+                            setAppliedReturnMax('');
+                          }}
+                          className="px-1.5 py-1 text-gray-400 hover:text-rose-600 rounded cursor-pointer transition text-[11px] font-bold"
+                          title="Reset filter"
+                        >
+                          Clear
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Quick Preset Buttons */}
+                    <div className="inline-flex rounded-lg border border-purple-200 bg-white p-0.5 shadow-2xs">
+                      {[
+                        { label: 'All', min: null, max: null, badge: custReturnCounts.all },
+                        { label: '0–5%', min: 0, max: 5, badge: custReturnCounts['0-5'] },
+                        { label: '5–10%', min: 5, max: 10, badge: custReturnCounts['5-10'] },
+                        { label: '10–20%', min: 10, max: 20, badge: custReturnCounts['10-20'] },
+                        { label: '20–30%', min: 20, max: 30, badge: custReturnCounts['20-30'] },
+                        { label: '>30%', min: 30, max: null, badge: custReturnCounts['30+'] }
+                      ].map(r => {
+                        const active = (r.min === null && r.max === null && appliedReturnMin === '' && appliedReturnMax === '') ||
+                          (appliedReturnMin !== '' && Number(appliedReturnMin) === r.min && (
+                            (r.max === null && appliedReturnMax === '') || (appliedReturnMax !== '' && Number(appliedReturnMax) === r.max)
+                          ));
+                        return (
+                          <button
+                            key={r.label}
+                            type="button"
+                            onClick={() => {
+                              const minStr = r.min !== null ? String(r.min) : '';
+                              const maxStr = r.max !== null ? String(r.max) : '';
+                              setCustReturnMinInput(minStr);
+                              setCustReturnMaxInput(maxStr);
+                              setAppliedReturnMin(minStr);
+                              setAppliedReturnMax(maxStr);
+                            }}
+                            className={`px-2 py-0.5 rounded-md text-[11px] font-bold transition cursor-pointer flex items-center gap-1.5 ${
+                              active
+                                ? 'bg-purple-600 text-white shadow-2xs'
+                                : 'text-gray-600 hover:text-purple-800 hover:bg-purple-50'
+                            }`}
+                          >
+                            <span>{r.label}</span>
+                            <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-black ${
+                              active ? 'bg-white/25 text-white' : 'bg-gray-100 text-gray-600'
+                            }`}>
+                              {r.badge}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="text-[11px] text-purple-900 font-semibold">
+                    Showing <span className="font-black text-purple-700">{displayedSkus.length}</span> of {billingData.skuWise?.length || 0} SKUs
+                  </div>
+                </div>
+
                 {/* Quick Sort Toolbar */}
-                <div className="px-4 py-2.5 bg-gray-50/80 border-y border-gray-200 flex flex-wrap items-center justify-between gap-2 text-xs">
+                <div className="px-4 py-2 bg-gray-50/80 border-b border-gray-200 flex flex-wrap items-center justify-between gap-2 text-xs">
                   <div className="flex items-center gap-1.5 flex-wrap">
                     <span className="text-gray-500 font-bold flex items-center gap-1 text-[11px] uppercase tracking-wider">
                       <FaSort className="w-3 h-3 text-indigo-500" />
@@ -1593,27 +1763,27 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
                     </span>
                     <button
                       type="button"
-                      onClick={() => setSkuSort({ field: 'totalReturnPercent', order: 'desc' })}
+                      onClick={() => setSkuSort({ field: 'custReturnPercent', order: 'desc' })}
                       className={`px-2 py-1 rounded-md text-[11px] font-bold transition cursor-pointer flex items-center gap-1 ${
-                        skuSort.field === 'totalReturnPercent' && skuSort.order === 'desc'
-                          ? 'bg-rose-600 text-white shadow-2xs'
-                          : 'bg-white text-rose-700 border border-rose-200 hover:bg-rose-50'
+                        skuSort.field === 'custReturnPercent' && skuSort.order === 'desc'
+                          ? 'bg-purple-600 text-white shadow-2xs'
+                          : 'bg-white text-purple-700 border border-purple-200 hover:bg-purple-50'
                       }`}
-                      title="Sort by highest total returns rate"
+                      title="Sort by Highest Customer Return %"
                     >
-                      <span>🔥 Highest Returns</span>
+                      <span>🔥 Highest Cust Ret %</span>
                     </button>
                     <button
                       type="button"
-                      onClick={() => setSkuSort({ field: 'totalReturnPercent', order: 'asc' })}
+                      onClick={() => setSkuSort({ field: 'custReturnPercent', order: 'asc' })}
                       className={`px-2 py-1 rounded-md text-[11px] font-bold transition cursor-pointer flex items-center gap-1 ${
-                        skuSort.field === 'totalReturnPercent' && skuSort.order === 'asc'
+                        skuSort.field === 'custReturnPercent' && skuSort.order === 'asc'
                           ? 'bg-emerald-600 text-white shadow-2xs'
                           : 'bg-white text-emerald-700 border border-emerald-200 hover:bg-emerald-50'
                       }`}
-                      title="Sort by lowest total returns rate"
+                      title="Sort by Lowest Customer Return %"
                     >
-                      <span>🌿 Lowest Returns</span>
+                      <span>🌿 Lowest Cust Ret %</span>
                     </button>
                     <button
                       type="button"
@@ -1789,18 +1959,6 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
                         </div>
                       </th>
 
-                      {/* Total Ret % */}
-                      <th
-                        className="px-3 py-3.5 text-center text-rose-900 bg-rose-50/50 group cursor-pointer select-none hover:bg-rose-100/60 transition-colors"
-                        onClick={() => handleSkuSort('totalReturnPercent')}
-                        title="Sort by Total Return % (Courier + Customer Returns)"
-                      >
-                        <div className="flex items-center justify-center gap-1 font-black">
-                          <span>Total Ret %</span>
-                          {renderSkuSortIcon('totalReturnPercent')}
-                        </div>
-                      </th>
-
                       {/* Net Total */}
                       <th
                         className="px-5 py-3.5 text-right text-blue-900 font-black group cursor-pointer select-none hover:bg-blue-50/60 transition-colors"
@@ -1817,7 +1975,7 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
                   <tbody className="divide-y divide-gray-100 text-xs">
                     {displayedSkus.length === 0 ? (
                       <tr>
-                        <td colSpan="9" className="py-12 text-center text-gray-400 font-medium">
+                        <td colSpan="8" className="py-12 text-center text-gray-400 font-medium">
                           No matching SKUs found.
                         </td>
                       </tr>
@@ -1970,25 +2128,6 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
                             </div>
                           </td>
 
-                          {/* Total Return % */}
-                          <td className="px-3 py-3.5 text-center font-bold bg-gray-50/40">
-                            <span
-                              className={`inline-block px-2.5 py-0.5 rounded-full text-[11px] font-black border shadow-2xs cursor-pointer hover:opacity-90 transition ${
-                                (s.totalReturnPercent || 0) > 25
-                                  ? 'bg-rose-100 text-rose-800 border-rose-300'
-                                  : (s.totalReturnPercent || 0) > 15
-                                  ? 'bg-amber-100 text-amber-800 border-amber-300'
-                                  : 'bg-emerald-100 text-emerald-800 border-emerald-300'
-                              }`}
-                              onClick={() => handleSkuSort('totalReturnPercent')}
-                              title={`Total Returns: ${s.totalReturnQty} pcs (${(s.totalReturnPercent || 0).toFixed(1)}% of dispatched). Click to sort.`}
-                            >
-                              {(s.totalReturnPercent || 0).toFixed(1)}%
-                            </span>
-                            <div className="text-[10px] text-gray-400 font-normal mt-0.5">
-                              {s.totalReturnQty} pcs ret
-                            </div>
-                          </td>
 
                           {/* Net Amount */}
                           <td className="px-5 py-3.5 text-right font-black text-blue-700 bg-blue-50/20">
