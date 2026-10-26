@@ -203,7 +203,7 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
 
   // Table sorting states
   const [companySort, setCompanySort] = useState({ field: 'netAmount', order: 'desc' });
-  const [skuSort, setSkuSort] = useState({ field: 'inventoryAmount', order: 'desc' });
+  const [skuSort, setSkuSort] = useState({ field: 'grossInventoryAmount', order: 'desc' });
   const [expandedMonths, setExpandedMonths] = useState(new Set([moment().format('YYYY-MM')]));
 
   // SKU Sorting handler & icon renderer
@@ -1397,7 +1397,7 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
                   <thead>
                     <tr className="bg-gray-50 text-[11px] font-bold text-gray-600 uppercase tracking-wider border-b border-gray-200">
                       <th className="px-5 py-3.5">Company Name</th>
-                      <th className="px-4 py-3.5 text-right text-emerald-800">Dispatched (Inv)</th>
+                      <th className="px-4 py-3.5 text-right text-emerald-800" title={`Dispatched = Rate + Dabbi + ₹${printRate} Print`}>Dispatched (₹)</th>
                       <th className="px-4 py-3.5 text-right text-rose-800">Cancelled</th>
                       <th className="px-4 py-3.5 text-right text-amber-800">Courier Returns</th>
                       <th className="px-4 py-3.5 text-right text-purple-800">Customer Returns</th>
@@ -1425,7 +1425,7 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
                             </div>
                           </td>
                           <td className="px-4 py-3.5 text-right font-medium text-emerald-700">
-                            <div className="font-bold">{formatINR(c.inventoryAmount)}</div>
+                            <div className="font-bold">{formatINR(c.grossInventoryAmount || (c.inventoryAmount + c.printCharge))}</div>
                             <div className="text-[10px] text-gray-400">{formatQty(c.inventoryQty)} pcs</div>
                           </td>
                           <td className="px-4 py-3.5 text-right font-medium text-rose-700">
@@ -1477,7 +1477,14 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
                     <tfoot>
                       <tr className="bg-gray-100/80 font-black text-xs text-gray-900 border-t-2 border-gray-300">
                         <td className="px-5 py-4 uppercase">Total ({displayedCompanies.length} Companies)</td>
-                        <td className="px-4 py-4 text-right text-emerald-800">{formatINR(summary.inventoryAmount)}</td>
+                        <td className="px-4 py-4 text-right text-emerald-800">
+                          <div className="font-bold">{formatINR(summary.grossInventoryAmount || summary.inventoryAmount)}</div>
+                          {summary.printCharge > 0 && (
+                            <div className="text-[10px] text-emerald-600 font-normal">
+                              માલ: {formatINR(summary.inventoryAmount)} + પ્રિન્ટ: {formatINR(summary.printCharge)}
+                            </div>
+                          )}
+                        </td>
                         <td className="px-4 py-4 text-right text-rose-800">{formatINR(summary.cancelledAmount)}</td>
                         <td className="px-4 py-4 text-right text-amber-800">{formatINR(summary.returnsAmount)}</td>
                         <td className="px-4 py-4 text-right text-purple-800">{formatINR(summary.customerReturnsAmount)}</td>
@@ -1529,7 +1536,7 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
                           <div className="flex items-center gap-6 text-xs text-right">
                             <div className="hidden sm:block">
                               <span className="text-gray-400 block text-[10px] font-bold uppercase">Dispatched</span>
-                              <span className="font-bold text-emerald-700">{formatINR(m.inventoryAmount)}</span>
+                              <span className="font-bold text-emerald-700">{formatINR(m.grossInventoryAmount || (m.inventoryAmount + m.printCharge))}</span>
                             </div>
                             <div className="hidden md:block">
                               <span className="text-gray-400 block text-[10px] font-bold uppercase">Cancelled</span>
@@ -1567,7 +1574,7 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
                                       {moment(d.date).format('DD MMM YYYY, ddd')}
                                     </td>
                                     <td className="px-4 py-2.5 text-right text-emerald-700 font-medium">
-                                      {formatINR(d.inventoryAmount)}
+                                      {formatINR(d.grossInventoryAmount || (d.inventoryAmount + d.printCharge))}
                                       <span className="text-[10px] text-gray-400 ml-1">({d.inventoryQty})</span>
                                     </td>
                                     <td className="px-4 py-2.5 text-right text-rose-700 font-medium">
@@ -1875,13 +1882,13 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
                     </button>
                     <button
                       type="button"
-                      onClick={() => setSkuSort({ field: 'inventoryAmount', order: 'desc' })}
+                      onClick={() => setSkuSort({ field: 'grossInventoryAmount', order: 'desc' })}
                       className={`px-2 py-1 rounded-md text-[11px] font-bold transition cursor-pointer flex items-center gap-1 ${
-                        skuSort.field === 'inventoryAmount' && skuSort.order === 'desc'
+                        skuSort.field === 'grossInventoryAmount' && skuSort.order === 'desc'
                           ? 'bg-indigo-600 text-white shadow-2xs'
                           : 'bg-white text-indigo-700 border border-indigo-200 hover:bg-indigo-50'
                       }`}
-                      title="Sort by highest dispatched amount"
+                      title="Sort by highest dispatched amount (includes printing)"
                     >
                       <span>📦 Most Dispatched</span>
                     </button>
@@ -1945,12 +1952,12 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
                       {/* Dispatched */}
                       <th
                         className="px-4 py-3.5 text-right text-emerald-800 group cursor-pointer select-none hover:bg-emerald-50/60 transition-colors"
-                        onClick={() => handleSkuSort('inventoryAmount')}
-                        title="Sort by Dispatched Amount"
+                        onClick={() => handleSkuSort('grossInventoryAmount')}
+                        title={`Sort by Dispatched Amount (Includes Rate + Dabbi + ₹${printRate} Print)`}
                       >
                         <div className="flex items-center justify-end gap-1">
-                          <span>Dispatched (Inv)</span>
-                          {renderSkuSortIcon('inventoryAmount')}
+                          <span>Dispatched (₹)</span>
+                          {renderSkuSortIcon('grossInventoryAmount')}
                         </div>
                       </th>
 
@@ -2167,10 +2174,16 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
                           {/* Effective Unit Rates */}
                           <td className="px-3 py-3.5 text-center text-[11px]">
                             <div className="space-y-1">
-                              <span className="px-2 py-0.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-200 font-bold block" title="Rate + Dabbi">
-                                Inv: {formatINR(s.invUnitRate)}
+                              <span
+                                className="px-2 py-0.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-200 font-bold block"
+                                title={`Rate (₹${s.itemRate || 0}) + Dabbi (₹${s.boxRate || 0}) + Print (₹${printRate || 0}) = ₹${((s.invUnitRate || 0) + (printRate || 0)).toFixed(2)}`}
+                              >
+                                Inv: {formatINR((s.invUnitRate || 0) + (printRate || 0))}
                               </span>
-                              <span className="px-2 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200 font-bold block" title="Rate + Dabbi Return">
+                              <span
+                                className="px-2 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200 font-bold block"
+                                title={`Rate (₹${s.itemRate || 0}) + Return Dabbi (₹${s.boxReturnRate || 0}) = ₹${(s.retUnitRate || 0).toFixed(2)}`}
+                              >
                                 Ret: {formatINR(s.retUnitRate)}
                               </span>
                             </div>
@@ -2178,7 +2191,7 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
 
                           {/* Dispatched */}
                           <td className="px-4 py-3.5 text-right font-medium text-emerald-700">
-                            <div className="font-bold">{formatINR(s.inventoryAmount)}</div>
+                            <div className="font-bold">{formatINR(s.grossInventoryAmount || (s.inventoryAmount + (s.printCharge || 0)))}</div>
                             <div className="text-[10px] text-gray-400">{s.inventoryQty} pcs</div>
                           </td>
 
@@ -2237,6 +2250,35 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
                       ))
                     )}
                   </tbody>
+                  {displayedSkus.length > 0 && (
+                    <tfoot>
+                      <tr className="bg-gray-100/80 font-black text-xs text-gray-900 border-t-2 border-gray-300">
+                        <td colSpan="3" className="px-4 py-4 uppercase">
+                          Total ({displayedSkus.length} SKUs)
+                        </td>
+                        <td className="px-4 py-4 text-right text-emerald-800">
+                          <div className="font-bold">{formatINR(summary.grossInventoryAmount || summary.inventoryAmount)}</div>
+                          <div className="text-[10px] text-gray-500 font-normal">{formatQty(summary.inventoryQty)} pcs</div>
+                        </td>
+                        <td className="px-3 py-4 text-right text-rose-800">
+                          <div className="font-bold">{formatINR(summary.cancelledAmount)}</div>
+                          <div className="text-[10px] text-gray-500 font-normal">{formatQty(summary.cancelledQty)} pcs</div>
+                        </td>
+                        <td className="px-3 py-4 text-right text-amber-800">
+                          <div className="font-bold">{formatINR(summary.returnsAmount)}</div>
+                          <div className="text-[10px] text-gray-500 font-normal">{formatQty(summary.returnsQty)} pcs</div>
+                        </td>
+                        <td className="px-3 py-4 text-right text-purple-800">
+                          <div className="font-bold">{formatINR(summary.customerReturnsAmount)}</div>
+                          <div className="text-[10px] text-gray-500 font-normal">{formatQty(summary.customerReturnsQty)} pcs</div>
+                        </td>
+                        <td className="px-5 py-4 text-right text-base text-blue-800 bg-blue-100/40">
+                          <div className="font-black">{formatINR(summary.netAmount)}</div>
+                          <div className="text-[10px] text-gray-500 font-normal">{formatQty(summary.netQty)} pcs net</div>
+                        </td>
+                      </tr>
+                    </tfoot>
+                  )}
                 </table>
               </div>
             )}

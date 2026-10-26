@@ -520,7 +520,7 @@ async function handler(req, res) {
         summary.missingRatesCount += 1;
       }
       return sk;
-    }).sort((a, b) => b.inventoryAmount - a.inventoryAmount);
+    }).sort((a, b) => b.grossInventoryAmount - a.grossInventoryAmount);
 
     // Convert Company Map to Array
     const companyWise = Array.from(companyMap.values()).map(c => {
