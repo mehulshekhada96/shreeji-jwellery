@@ -803,7 +803,7 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
     <div className="space-y-5">
 
       {/* ── TOP CONTROL PANEL ── */}
-      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm">
 
         {/* Row 1: Title + Action Buttons */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 px-5 py-4 border-b border-gray-100">
