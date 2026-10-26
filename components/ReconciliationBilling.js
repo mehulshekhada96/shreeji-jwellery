@@ -1789,18 +1789,6 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
                         </div>
                       </th>
 
-                      {/* Total Ret % */}
-                      <th
-                        className="px-3 py-3.5 text-center text-rose-900 bg-rose-50/50 group cursor-pointer select-none hover:bg-rose-100/60 transition-colors"
-                        onClick={() => handleSkuSort('totalReturnPercent')}
-                        title="Sort by Total Return % (Courier + Customer Returns)"
-                      >
-                        <div className="flex items-center justify-center gap-1 font-black">
-                          <span>Total Ret %</span>
-                          {renderSkuSortIcon('totalReturnPercent')}
-                        </div>
-                      </th>
-
                       {/* Net Total */}
                       <th
                         className="px-5 py-3.5 text-right text-blue-900 font-black group cursor-pointer select-none hover:bg-blue-50/60 transition-colors"
@@ -1817,7 +1805,7 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
                   <tbody className="divide-y divide-gray-100 text-xs">
                     {displayedSkus.length === 0 ? (
                       <tr>
-                        <td colSpan="9" className="py-12 text-center text-gray-400 font-medium">
+                        <td colSpan="8" className="py-12 text-center text-gray-400 font-medium">
                           No matching SKUs found.
                         </td>
                       </tr>
@@ -1970,25 +1958,6 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
                             </div>
                           </td>
 
-                          {/* Total Return % */}
-                          <td className="px-3 py-3.5 text-center font-bold bg-gray-50/40">
-                            <span
-                              className={`inline-block px-2.5 py-0.5 rounded-full text-[11px] font-black border shadow-2xs cursor-pointer hover:opacity-90 transition ${
-                                (s.totalReturnPercent || 0) > 25
-                                  ? 'bg-rose-100 text-rose-800 border-rose-300'
-                                  : (s.totalReturnPercent || 0) > 15
-                                  ? 'bg-amber-100 text-amber-800 border-amber-300'
-                                  : 'bg-emerald-100 text-emerald-800 border-emerald-300'
-                              }`}
-                              onClick={() => handleSkuSort('totalReturnPercent')}
-                              title={`Total Returns: ${s.totalReturnQty} pcs (${(s.totalReturnPercent || 0).toFixed(1)}% of dispatched). Click to sort.`}
-                            >
-                              {(s.totalReturnPercent || 0).toFixed(1)}%
-                            </span>
-                            <div className="text-[10px] text-gray-400 font-normal mt-0.5">
-                              {s.totalReturnQty} pcs ret
-                            </div>
-                          </td>
 
                           {/* Net Amount */}
                           <td className="px-5 py-3.5 text-right font-black text-blue-700 bg-blue-50/20">
