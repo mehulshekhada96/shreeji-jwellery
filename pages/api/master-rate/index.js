@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import connectToDatabase from '../../../lib/mongodb';
 import MasterRate from '../../../models/MasterRate';
 import MasterRateHistory from '../../../models/MasterRateHistory';
@@ -131,6 +132,8 @@ async function handler(req, res) {
         return res.status(400).json({ message: `Original Product "${trimmedOrigin}" already exists in Master Rates` });
       }
 
+      const cleanDabbi = (dabbi && mongoose.Types.ObjectId.isValid(dabbi)) ? dabbi : null;
+
       const newRate = await MasterRate.create({
         company: companyId,
         origin: trimmedOrigin,
@@ -138,7 +141,7 @@ async function handler(req, res) {
         itemRate: numItemRate,
         boxRate: numBoxRate,
         boxReturnRate: numBoxReturnRate,
-        dabbi: dabbi || null,
+        dabbi: cleanDabbi,
         dabbiName: (dabbiName || '').trim(),
         size: cleanSize,
         lastModifiedBy: user._id,
@@ -225,7 +228,9 @@ async function handler(req, res) {
 
       if (imageLink !== undefined) existing.imageLink = (imageLink || '').trim();
       if (size !== undefined) existing.size = (size || '').trim();
-      if (dabbi !== undefined) existing.dabbi = dabbi || null;
+      if (dabbi !== undefined) {
+        existing.dabbi = (dabbi && mongoose.Types.ObjectId.isValid(dabbi)) ? dabbi : null;
+      }
       if (dabbiName !== undefined) existing.dabbiName = (dabbiName || '').trim();
 
       const newItemRate = itemRate !== undefined ? (Number(itemRate) || 0) : oldItemRate;

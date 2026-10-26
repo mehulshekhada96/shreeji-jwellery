@@ -99,6 +99,56 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
   });
   const [allOriginsList, setAllOriginsList] = useState([]);
   const [loadingOrigins, setLoadingOrigins] = useState(false);
+  const [dabbis, setDabbis] = useState([]);
+
+  // Fetch active Dabbis for resolving packaging box names
+  const fetchDabbis = useCallback(async () => {
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) return;
+      const res = await axios.get('/api/dabbi', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.data?.success && Array.isArray(res.data.dabbis)) {
+        setDabbis(res.data.dabbis);
+      }
+    } catch (err) {
+      console.error('Error fetching dabbis in ReconciliationBilling:', err);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchDabbis();
+  }, [fetchDabbis]);
+
+  // Helper to resolve packaging dabbi name for a SKU
+  const resolveDabbiForSku = useCallback((s) => {
+    if (!s) return null;
+    const originVal = s.origin && s.origin !== 'Unmapped SKU' ? s.origin : '';
+    const matchedRate = allOriginsList.find(
+      r => (r.origin || '').trim().toLowerCase() === originVal.trim().toLowerCase()
+    );
+    if (matchedRate?.dabbiName && matchedRate.dabbiName !== 'Custom') {
+      return matchedRate.dabbiName;
+    }
+    if (dabbis && dabbis.length > 0) {
+      if (matchedRate?.dabbi) {
+        const found = dabbis.find(d => String(d._id) === String(matchedRate.dabbi));
+        if (found) return found.name;
+      }
+      const bRate = s.boxRate != null ? Number(s.boxRate) : (matchedRate?.boxRate != null ? Number(matchedRate.boxRate) : null);
+      const bRetRate = s.boxReturnRate != null ? Number(s.boxReturnRate) : (matchedRate?.boxReturnRate != null ? Number(matchedRate.boxReturnRate) : null);
+      if (bRate != null && bRate > 0) {
+        if (bRetRate != null && bRetRate > 0) {
+          const matchBoth = dabbis.find(d => Number(d.boxRate) === bRate && Number(d.boxReturnRate) === bRetRate);
+          if (matchBoth) return matchBoth.name;
+        }
+        const matchSingle = dabbis.find(d => Number(d.boxRate) === bRate);
+        if (matchSingle) return matchSingle.name;
+      }
+    }
+    return null;
+  }, [allOriginsList, dabbis]);
 
   // Close dropdowns on outside click
   useEffect(() => {
@@ -268,6 +318,25 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
       r => (r.origin || '').trim().toLowerCase() === originVal.trim().toLowerCase()
     );
 
+    const targetBoxRate = s.boxRate != null && s.boxRate > 0 
+      ? s.boxRate 
+      : (matchedRate?.boxRate != null ? matchedRate.boxRate : (printRate || 2.40));
+    const targetBoxReturnRate = s.boxReturnRate != null && s.boxReturnRate > 0 
+      ? s.boxReturnRate 
+      : (matchedRate?.boxReturnRate != null ? matchedRate.boxReturnRate : (printRate || 2.40));
+
+    let dabbiId = matchedRate?.dabbi || null;
+    let dabbiName = (matchedRate?.dabbiName && matchedRate.dabbiName !== 'Custom') ? matchedRate.dabbiName : '';
+    if (!dabbiName && dabbis.length > 0 && targetBoxRate != null && Number(targetBoxRate) > 0) {
+      const br = Number(targetBoxRate);
+      const brr = targetBoxReturnRate != null ? Number(targetBoxReturnRate) : null;
+      const match = (brr != null ? dabbis.find(d => Number(d.boxRate) === br && Number(d.boxReturnRate) === brr) : null) || dabbis.find(d => Number(d.boxRate) === br);
+      if (match) {
+        dabbiId = match._id;
+        dabbiName = match.name;
+      }
+    }
+
     setQuickMapModal({
       isOpen: true,
       sku: s.sku || '',
@@ -276,14 +345,10 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
       itemRate: s.itemRate != null && s.itemRate > 0 
         ? s.itemRate 
         : (matchedRate?.itemRate != null ? matchedRate.itemRate : ''),
-      boxRate: s.boxRate != null && s.boxRate > 0 
-        ? s.boxRate 
-        : (matchedRate?.boxRate != null ? matchedRate.boxRate : (printRate || 2.40)),
-      boxReturnRate: s.boxReturnRate != null && s.boxReturnRate > 0 
-        ? s.boxReturnRate 
-        : (matchedRate?.boxReturnRate != null ? matchedRate.boxReturnRate : (printRate || 2.40)),
-      dabbi: matchedRate?.dabbi || null,
-      dabbiName: matchedRate?.dabbiName || '',
+      boxRate: targetBoxRate,
+      boxReturnRate: targetBoxReturnRate,
+      dabbi: dabbiId,
+      dabbiName: dabbiName,
       imageLink: s.imageLink || (matchedRate?.imageLink) || '',
       effectiveFromDate: startDate || moment().format('YYYY-MM-DD'),
       isCorrection: true,
@@ -296,6 +361,17 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
   const handleOriginChange = (val) => {
     const trimmed = (val || '').trim().toLowerCase();
     const matched = allOriginsList.find(r => (r.origin || '').trim().toLowerCase() === trimmed);
+    let matchedDabbiId = matched?.dabbi || null;
+    let matchedDabbiName = (matched?.dabbiName && matched.dabbiName !== 'Custom') ? matched.dabbiName : '';
+    if (!matchedDabbiName && matched?.boxRate != null && dabbis.length > 0) {
+      const br = Number(matched.boxRate);
+      const brr = matched.boxReturnRate != null ? Number(matched.boxReturnRate) : null;
+      const dMatch = (brr != null ? dabbis.find(d => Number(d.boxRate) === br && Number(d.boxReturnRate) === brr) : null) || dabbis.find(d => Number(d.boxRate) === br);
+      if (dMatch) {
+        matchedDabbiId = dMatch._id;
+        matchedDabbiName = dMatch.name;
+      }
+    }
     setQuickMapModal(prev => ({
       ...prev,
       origin: val,
@@ -303,8 +379,8 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
       itemRate: matched?.itemRate !== undefined ? matched.itemRate : prev.itemRate,
       boxRate: matched?.boxRate !== undefined ? matched.boxRate : prev.boxRate,
       boxReturnRate: matched?.boxReturnRate !== undefined ? matched.boxReturnRate : prev.boxReturnRate,
-      dabbi: matched?.dabbi !== undefined ? matched.dabbi : prev.dabbi,
-      dabbiName: matched?.dabbiName !== undefined ? matched.dabbiName : prev.dabbiName,
+      dabbi: matchedDabbiId !== null ? matchedDabbiId : prev.dabbi,
+      dabbiName: matchedDabbiName || prev.dabbiName,
       imageLink: matched?.imageLink !== undefined ? matched.imageLink : prev.imageLink,
     }));
   };
@@ -2059,6 +2135,29 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
                                 <span className="text-[10px] text-gray-400">DR:</span>
                                 <span>{s.boxReturnRate != null ? `₹${s.boxReturnRate}` : '—'}</span>
                               </div>
+                              {(() => {
+                                const matchedDabbi = resolveDabbiForSku(s);
+                                if (matchedDabbi) {
+                                  return (
+                                    <div className="text-[10px] text-purple-700 font-semibold truncate max-w-[110px] mx-auto mt-0.5" title={`Dabbi: ${matchedDabbi}`}>
+                                      📦 {matchedDabbi}
+                                    </div>
+                                  );
+                                }
+                                return (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleOpenQuickMap(s);
+                                    }}
+                                    className="text-[9px] text-amber-600 hover:text-amber-800 font-bold block mx-auto mt-0.5 hover:underline cursor-pointer"
+                                    title="Click to configure packaging box for this SKU"
+                                  >
+                                    Configure your box
+                                  </button>
+                                );
+                              })()}
                             </div>
                             <span className="text-[9px] text-indigo-600 font-bold opacity-0 group-hover:opacity-100 transition-opacity block mt-0.5">
                               ⚡ Edit Rates

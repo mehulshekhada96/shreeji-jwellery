@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import connectToDatabase from '../../../lib/mongodb';
 import MasterSku from '../../../models/MasterSku';
 import MasterSkuHistory from '../../../models/MasterSkuHistory';
@@ -121,13 +122,15 @@ async function handler(req, res) {
       const effectiveDate = effectiveFromDate ? new Date(effectiveFromDate) : new Date('2020-01-01');
       effectiveDate.setHours(0, 0, 0, 0);
 
+      const cleanDabbi = (dabbi && mongoose.Types.ObjectId.isValid(dabbi)) ? dabbi : null;
+
       const newRate = await MasterRate.create({
         company: companyId,
         origin: trimmedOrigin,
         itemRate: finalItemRate,
         boxRate: finalBoxRate,
         boxReturnRate: finalBoxReturnRate,
-        dabbi: dabbi || null,
+        dabbi: cleanDabbi,
         dabbiName: (dabbiName || '').trim(),
         size: trimmedSize,
         imageLink: cleanImageLink,
@@ -241,7 +244,9 @@ async function handler(req, res) {
         existingRate.itemRate = targetItemRate;
         existingRate.boxRate = targetBoxRate;
         existingRate.boxReturnRate = targetBoxReturnRate;
-        if (dabbi !== undefined) existingRate.dabbi = dabbi || null;
+        if (dabbi !== undefined) {
+          existingRate.dabbi = (dabbi && mongoose.Types.ObjectId.isValid(dabbi)) ? dabbi : null;
+        }
         if (dabbiName !== undefined) existingRate.dabbiName = (dabbiName || '').trim();
         existingRate.lastModifiedBy = user._id;
         existingRate.lastModifiedByName = user.name || user.username || 'User';
