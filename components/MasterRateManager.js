@@ -138,6 +138,7 @@ export default function MasterRateManager({ onMasterRatesUpdated, initialSearch 
   const [showAddModal, setShowAddModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showDabbiManager, setShowDabbiManager] = useState(false);
+  const [dabbis, setDabbis] = useState([]);
   const [editingItem, setEditingItem] = useState(null);
   const [formData, setFormData] = useState({
     origin: '',
@@ -150,6 +151,51 @@ export default function MasterRateManager({ onMasterRatesUpdated, initialSearch 
     dabbiName: ''
   });
   const [saving, setSaving] = useState(false);
+
+  // Fetch active Dabbis for resolving packaging box names
+  const fetchDabbis = useCallback(async () => {
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) return;
+      const res = await axios.get('/api/dabbi', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.data?.success && Array.isArray(res.data.dabbis)) {
+        setDabbis(res.data.dabbis);
+      }
+    } catch (err) {
+      console.error('Error fetching dabbis in MasterRateManager:', err);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchDabbis();
+  }, [fetchDabbis]);
+
+  // Helper to resolve Dabbi name from item (checks explicit name, ObjectId, or matching box rates)
+  const resolveItemDabbi = useCallback((item) => {
+    if (!item) return null;
+    if (item.dabbiName && item.dabbiName !== 'Custom') {
+      return item.dabbiName;
+    }
+    if (dabbis && dabbis.length > 0) {
+      if (item.dabbi) {
+        const match = dabbis.find(d => String(d._id) === String(item.dabbi));
+        if (match) return match.name;
+      }
+      if (item.boxRate != null && Number(item.boxRate) > 0) {
+        const br = Number(item.boxRate);
+        const brr = item.boxReturnRate != null && Number(item.boxReturnRate) > 0 ? Number(item.boxReturnRate) : null;
+        if (brr !== null) {
+          const matchBoth = dabbis.find(d => Number(d.boxRate) === br && Number(d.boxReturnRate) === brr);
+          if (matchBoth) return matchBoth.name;
+        }
+        const matchRate = dabbis.find(d => Number(d.boxRate) === br);
+        if (matchRate) return matchRate.name;
+      }
+    }
+    return null;
+  }, [dabbis]);
 
   // Delete Modal state
   const [showDeleteModal, setShowDeleteModal] = useState(false);
@@ -807,15 +853,20 @@ export default function MasterRateManager({ onMasterRatesUpdated, initialSearch 
   // Edit Single Rate
   const openEditModal = (item) => {
     setEditingItem(item);
+    const resolvedName = resolveItemDabbi(item);
+    const matchedDabbiObj = resolvedName && dabbis.length > 0
+      ? dabbis.find(d => d.name === resolvedName || String(d._id) === String(item.dabbi))
+      : null;
+
     setFormData({
       origin: item.origin || '',
       imageLink: item.imageLink || '',
       itemRate: item.itemRate != null ? item.itemRate : '',
       boxRate: item.boxRate != null ? item.boxRate : '',
       boxReturnRate: item.boxReturnRate != null ? item.boxReturnRate : '',
-      size: item.size || '',
-      dabbi: item.dabbi || null,
-      dabbiName: item.dabbiName || ''
+      size: item.size || (matchedDabbiObj?.size || ''),
+      dabbi: item.dabbi || (matchedDabbiObj?._id || null),
+      dabbiName: item.dabbiName || resolvedName || ''
     });
     setRateEffectiveFromDate(new Date().toISOString().split('T')[0]);
     setIsRateCorrection(false);
@@ -1506,11 +1557,26 @@ export default function MasterRateManager({ onMasterRatesUpdated, initialSearch 
                       </td>
                       <td className="px-5 py-3.5 font-mono text-gray-800">
                         <div>{item.boxRate != null ? `₹${Number(item.boxRate).toFixed(2)}` : '₹0.00'}</div>
-                        {item.dabbiName && (
-                          <div className="text-[10px] text-purple-700 font-sans font-semibold truncate max-w-[120px]" title={`Dabbi: ${item.dabbiName}`}>
-                            📦 {item.dabbiName}
-                          </div>
-                        )}
+                        {(() => {
+                          const matchedDabbi = resolveItemDabbi(item);
+                          if (matchedDabbi) {
+                            return (
+                              <div className="text-[10px] text-purple-700 font-sans font-semibold truncate max-w-[120px]" title={`Dabbi: ${matchedDabbi}`}>
+                                📦 {matchedDabbi}
+                              </div>
+                            );
+                          }
+                          return (
+                            <button
+                              type="button"
+                              onClick={() => openEditModal(item)}
+                              className="text-[10px] text-amber-600 hover:text-amber-800 font-sans font-bold block mt-0.5 hover:underline cursor-pointer"
+                              title="Click to configure packaging box"
+                            >
+                              + Configure your box
+                            </button>
+                          );
+                        })()}
                       </td>
                       <td className="px-5 py-3.5 font-mono text-gray-800">
                         {item.boxReturnRate != null ? `₹${Number(item.boxReturnRate).toFixed(2)}` : '₹0.00'}
@@ -3050,7 +3116,10 @@ export default function MasterRateManager({ onMasterRatesUpdated, initialSearch 
       <DabbiManager
         isOpen={showDabbiManager}
         onClose={() => setShowDabbiManager(false)}
-        onDabbiUpdated={() => fetchRates(page, search, sortBy, sortOrder, true)}
+        onDabbiUpdated={() => {
+          fetchDabbis();
+          fetchRates(page, search, sortBy, sortOrder, true);
+        }}
       />
     </div>
   );

@@ -103,6 +103,11 @@ export default function DabbiSelect({
   const selectedDabbi = useMemo(() => {
     if (!dabbis || dabbis.length === 0) return null;
 
+    // If explicitly marked Custom, do not auto-match to a Dabbi
+    if (value === 'Custom' || selectedName === 'Custom') {
+      return null;
+    }
+
     // 1. By ID match
     if (value) {
       const matchById = dabbis.find(d => String(d._id) === String(value));
@@ -110,7 +115,7 @@ export default function DabbiSelect({
     }
 
     // 2. By selectedName match
-    if (selectedName && selectedName !== 'Custom') {
+    if (selectedName) {
       const matchByName = dabbis.find(
         d => d.name && d.name.trim().toLowerCase() === String(selectedName).trim().toLowerCase()
       );
@@ -118,7 +123,7 @@ export default function DabbiSelect({
     }
 
     // 3. By value being the name
-    if (value && typeof value === 'string' && value !== 'Custom') {
+    if (value && typeof value === 'string') {
       const matchByValName = dabbis.find(
         d => d.name && d.name.trim().toLowerCase() === value.trim().toLowerCase()
       );
@@ -126,17 +131,40 @@ export default function DabbiSelect({
     }
 
     // 4. By exact rate match (if rates are provided and > 0)
-    if (boxRate !== undefined && boxRate !== '' && Number(boxRate) > 0 &&
-        boxReturnRate !== undefined && boxReturnRate !== '' && Number(boxReturnRate) > 0) {
-      const matchByRate = dabbis.find(d =>
-        Number(d.boxRate) === Number(boxRate) &&
-        Number(d.boxReturnRate) === Number(boxReturnRate)
-      );
-      if (matchByRate) return matchByRate;
+    if (boxRate !== undefined && boxRate !== '' && Number(boxRate) > 0) {
+      const numBoxRate = Number(boxRate);
+      const numBoxRetRate = (boxReturnRate !== undefined && boxReturnRate !== '' && Number(boxReturnRate) > 0)
+        ? Number(boxReturnRate)
+        : null;
+
+      // 4a. Match both boxRate and boxReturnRate
+      if (numBoxRetRate !== null) {
+        const matchBoth = dabbis.find(d =>
+          Number(d.boxRate) === numBoxRate &&
+          Number(d.boxReturnRate) === numBoxRetRate
+        );
+        if (matchBoth) return matchBoth;
+      }
+
+      // 4b. Or match by boxRate alone
+      const matchByBoxRate = dabbis.find(d => Number(d.boxRate) === numBoxRate);
+      if (matchByBoxRate) return matchByBoxRate;
     }
 
     return null;
   }, [value, selectedName, dabbis, boxRate, boxReturnRate]);
+
+  // Is current selection explicitly Custom / Manual
+  const isCustomRate = !selectedDabbi && (value === 'Custom' || selectedName === 'Custom');
+
+  // Auto-sync matched dabbi to parent form state if parent doesn't have dabbi set yet
+  useEffect(() => {
+    if (selectedDabbi && !value && !selectedName) {
+      if (onChange) {
+        onChange(selectedDabbi, false);
+      }
+    }
+  }, [selectedDabbi, value, selectedName, onChange]);
 
   // Filtered dabbis for dropdown search
   const filteredDabbis = useMemo(() => {
@@ -250,9 +278,6 @@ export default function DabbiSelect({
     }
   };
 
-  // Label display logic
-  const isCustomRate = selectedName === 'Custom' || (!selectedDabbi && (boxRate != null && boxRate !== '' && Number(boxRate) > 0));
-
   return (
     <div className="relative" ref={dropdownRef}>
       {/* Dropdown Trigger Button */}
@@ -301,22 +326,19 @@ export default function DabbiSelect({
                 </span>
               )}
             </>
-          ) : isCustomRate ? (
-            <>
-              <div className="w-6 h-6 rounded-md bg-amber-100 border border-amber-200 flex items-center justify-center text-amber-700 shrink-0 text-xs">
-                ⚙️
-              </div>
-              <span className="font-semibold text-gray-800 truncate">
-                Custom / Manual Box Rate
-              </span>
-              <span className="text-[11px] font-mono text-gray-600 shrink-0 ml-auto mr-1">
-                (₹{boxRate} / Ret: ₹{boxReturnRate})
-              </span>
-            </>
           ) : (
-            <div className="flex items-center gap-2 text-gray-400">
-              <FaBoxOpen className="w-4 h-4 text-gray-400" />
-              <span>Select Dabbi (Box Rate)...</span>
+            <div className="flex items-center gap-2 text-amber-700 font-semibold">
+              <div className="w-6 h-6 rounded-md bg-amber-100 border border-amber-300 flex items-center justify-center text-amber-700 shrink-0 text-xs font-bold">
+                +
+              </div>
+              <span className="truncate">
+                Configure your box
+              </span>
+              {boxRate != null && boxRate !== '' && Number(boxRate) > 0 && (
+                <span className="text-[11px] font-mono text-gray-500 font-normal shrink-0 ml-auto mr-1">
+                  (₹{boxRate} / Ret: ₹{boxReturnRate || 0})
+                </span>
+              )}
             </div>
           )}
         </div>

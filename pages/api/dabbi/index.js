@@ -1,6 +1,8 @@
+import mongoose from 'mongoose';
 import connectToDatabase from '../../../lib/mongodb';
 import Dabbi from '../../../models/Dabbi';
 import MasterRate from '../../../models/MasterRate';
+import Company from '../../../models/company';
 import { authMiddleware } from '../common/common.services';
 
 function escapeRegex(text) {
@@ -15,11 +17,31 @@ async function handler(req, res) {
     return res.status(401).json({ message: 'Unauthorized' });
   }
 
-  const companyId = req.query.company || req.body?.company || user.company;
+  await connectToDatabase();
+
+  let companyId = user.company;
+  const requestedCompany = req.query.company || req.body?.company;
+  if (requestedCompany) {
+    if (mongoose.Types.ObjectId.isValid(requestedCompany)) {
+      companyId = requestedCompany;
+    } else {
+      try {
+        const foundCompany = await Company.findOne({
+          companyName: requestedCompany,
+          isDeleted: { $ne: true }
+        }).lean();
+        if (foundCompany?._id) {
+          companyId = foundCompany._id;
+        }
+      } catch (e) {
+        console.error('Error finding company by name:', e);
+      }
+    }
+  }
+
   if (!companyId) {
     return res.status(401).json({ message: 'No company associated' });
   }
-  await connectToDatabase();
 
   // ---------------------------------------------------------------------------
   // GET: Fetch all active Dabbis for company
