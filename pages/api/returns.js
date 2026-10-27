@@ -1,5 +1,6 @@
 import ReturnOrder from '../../models/ReturnOrder';
 import { authMiddleware } from './common/common.services';
+import { getCompanyMappingInfo, buildCompanyQueryFilter } from '../../lib/companyMappingHelper';
 
 async function handler(req, res) {
   const { method } = req;
@@ -35,8 +36,15 @@ async function handler(req, res) {
         }
       }
 
-      if (companyName) {
-        query.companyName = { $regex: companyName, $options: 'i' };
+      // Company name filter
+      const { aliasMap } = await getCompanyMappingInfo(user.company);
+      const companyFilter = buildCompanyQueryFilter({
+        user,
+        requestedCompanies: companyName ? [companyName] : [],
+        aliasMap
+      });
+      if (companyFilter) {
+        query.companyName = companyFilter;
       }
 
       if (sku) {

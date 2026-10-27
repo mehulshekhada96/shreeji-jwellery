@@ -34,6 +34,7 @@ import {
   FaDownload
 } from 'react-icons/fa';
 import DabbiSelect from './DabbiSelect';
+import { canWriteMasterSku, canWriteMasterRate } from '../lib/constants';
 
 export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateToMasterSku }) {
   const router = useRouter();
@@ -102,6 +103,20 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
   const [allOriginsList, setAllOriginsList] = useState([]);
   const [loadingOrigins, setLoadingOrigins] = useState(false);
   const [dabbis, setDabbis] = useState([]);
+  const [currentUser, setCurrentUser] = useState(null);
+
+  useEffect(() => {
+    try {
+      const u = JSON.parse(localStorage.getItem('user') || '{}');
+      setCurrentUser(u);
+    } catch (e) {
+      setCurrentUser(null);
+    }
+  }, []);
+
+  const canQuickMap = useMemo(() => {
+    return Boolean(canWriteMasterSku(currentUser) && canWriteMasterRate(currentUser));
+  }, [currentUser]);
 
   // Fetch active Dabbis for resolving packaging box names
   const fetchDabbis = useCallback(async () => {
@@ -315,6 +330,10 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
 
   // Open Quick Map & Rate Modal for any SKU
   const handleOpenQuickMap = (s) => {
+    if (!canQuickMap) {
+      toast.error('Write permissions for both Master SKU and Master Rate are required to use Quick Map.');
+      return;
+    }
     const originVal = s.origin && s.origin !== 'Unmapped SKU' ? s.origin : '';
     const matchedRate = allOriginsList.find(
       r => (r.origin || '').trim().toLowerCase() === originVal.trim().toLowerCase()
@@ -390,6 +409,10 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
   // Submit quick-map request and recalculate billing in real-time
   const handleSaveQuickMap = async (e) => {
     if (e) e.preventDefault();
+    if (!canQuickMap) {
+      toast.error('Write permissions for both Master SKU and Master Rate are required to save changes.');
+      return;
+    }
     if (!quickMapModal.sku || !quickMapModal.sku.trim()) {
       toast.error('SKU is required');
       return;
@@ -2149,9 +2172,9 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
                                     <div className="flex items-center gap-1">
                                       <button
                                         type="button"
-                                        onClick={() => handleOpenQuickMap(s)}
-                                        className="text-gray-400 hover:text-indigo-600 p-0.5 cursor-pointer transition-colors"
-                                        title="Edit SKU Mapping & Rates in real-time"
+                                        onClick={canQuickMap ? () => handleOpenQuickMap(s) : () => toast.error('Write permissions for both Master SKU and Master Rate are required.')}
+                                        className={`p-0.5 transition-colors ${canQuickMap ? 'text-gray-400 hover:text-indigo-600 cursor-pointer' : 'text-gray-300 cursor-not-allowed'}`}
+                                        title={canQuickMap ? "Edit SKU Mapping & Rates in real-time" : "Requires Master SKU and Rate write permissions"}
                                       >
                                         <FaEdit className="w-2.5 h-2.5" />
                                       </button>
@@ -2167,11 +2190,11 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
                                   ) : (
                                     <button
                                       type="button"
-                                      onClick={() => handleOpenQuickMap(s)}
-                                      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-500 hover:bg-amber-600 text-white shadow-2xs transition-colors cursor-pointer"
-                                      title="Map SKU to Origin & Set Rate in real-time"
+                                      onClick={canQuickMap ? () => handleOpenQuickMap(s) : () => toast.error('Write permissions for both Master SKU and Master Rate are required.')}
+                                      className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold shadow-2xs transition-colors ${canQuickMap ? 'bg-amber-500 hover:bg-amber-600 text-white cursor-pointer' : 'bg-gray-300 text-gray-500 cursor-not-allowed'}`}
+                                      title={canQuickMap ? "Map SKU to Origin & Set Rate in real-time" : "Requires Master SKU and Rate write permissions"}
                                     >
-                                      <FaBolt className="w-2.5 h-2.5 text-yellow-200" />
+                                      <FaBolt className={`w-2.5 h-2.5 ${canQuickMap ? 'text-yellow-200' : 'text-gray-400'}`} />
                                       <span>{s.origin === 'Unmapped SKU' ? 'Map & Rate' : '+ Add Rate'}</span>
                                     </button>
                                   )}
@@ -2186,7 +2209,11 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
                           </td>
 
                           {/* Unit Rates (Rate / Dabbi / Ret Dabbi) */}
-                          <td className="px-3 py-3.5 text-center group cursor-pointer" onClick={() => handleOpenQuickMap(s)} title="Click to edit rates in real-time">
+                          <td
+                            className={`px-3 py-3.5 text-center group ${canQuickMap ? 'cursor-pointer hover:bg-amber-50/40' : 'cursor-default'}`}
+                            onClick={canQuickMap ? () => handleOpenQuickMap(s) : undefined}
+                            title={canQuickMap ? "Click to edit rates in real-time" : "Quick Map requires Master SKU and Rate write permissions"}
+                          >
                             <div className="space-y-0.5 text-[11px]">
                               <div className="text-gray-700 font-semibold flex items-center justify-center gap-1">
                                 <span className="text-[10px] text-gray-400">R:</span>
@@ -2214,10 +2241,14 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
                                     type="button"
                                     onClick={(e) => {
                                       e.stopPropagation();
-                                      handleOpenQuickMap(s);
+                                      if (canQuickMap) {
+                                        handleOpenQuickMap(s);
+                                      } else {
+                                        toast.error('Write permissions for both Master SKU and Master Rate are required.');
+                                      }
                                     }}
-                                    className="text-[9px] text-amber-600 hover:text-amber-800 font-bold block mx-auto mt-0.5 hover:underline cursor-pointer"
-                                    title="Click to configure packaging box for this SKU"
+                                    className={`text-[9px] font-bold block mx-auto mt-0.5 ${canQuickMap ? 'text-amber-600 hover:text-amber-800 hover:underline cursor-pointer' : 'text-gray-400 cursor-not-allowed'}`}
+                                    title={canQuickMap ? "Click to configure packaging box for this SKU" : "Requires Master SKU and Rate write permissions"}
                                   >
                                     Configure your box
                                   </button>
@@ -2839,6 +2870,12 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
             <form onSubmit={handleSaveQuickMap} className="flex-1 flex flex-col overflow-hidden bg-gray-50/50">
               
               <div className="p-4 sm:p-5 space-y-3.5 overflow-y-auto flex-1">
+                {!canQuickMap && (
+                  <div className="p-3 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl text-xs flex items-center gap-2">
+                    <FaExclamationTriangle className="text-rose-600 flex-shrink-0" />
+                    <span>Write permissions for both Master SKU and Master Rate are required to save changes.</span>
+                  </div>
+                )}
                 {/* SKU Info Card */}
                 <div className="p-3 bg-white border border-gray-200 rounded-xl shadow-2xs flex items-center justify-between">
                   <div>
@@ -3093,8 +3130,9 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
                 </button>
                 <button
                   type="submit"
-                  disabled={quickMapModal.saving}
-                  className="flex items-center gap-1.5 px-5 py-2 bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-700 hover:to-orange-700 text-white text-xs font-bold rounded-xl shadow-md transition cursor-pointer disabled:opacity-60"
+                  disabled={quickMapModal.saving || !canQuickMap}
+                  title={!canQuickMap ? 'Write permissions for both Master SKU and Master Rate are required' : ''}
+                  className="flex items-center gap-1.5 px-5 py-2 bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-700 hover:to-orange-700 text-white text-xs font-bold rounded-xl shadow-md transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {quickMapModal.saving ? (
                     <>

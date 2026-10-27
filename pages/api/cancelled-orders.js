@@ -1,6 +1,7 @@
 import CancelledOrder from '../../models/CancelledOrder';
 import CompanyEmailMapping from '../../models/CompanyEmailMapping';
 import { authMiddleware } from './common/common.services';
+import { getCompanyMappingInfo, buildCompanyQueryFilter } from '../../lib/companyMappingHelper';
 
 async function handler(req, res) {
   const { method } = req;
@@ -39,8 +40,14 @@ async function handler(req, res) {
       }
 
       // Company name filter
-      if (companyName) {
-        query.companyName = { $regex: companyName, $options: 'i' };
+      const { aliasMap } = await getCompanyMappingInfo(user.company);
+      const companyFilter = buildCompanyQueryFilter({
+        user,
+        requestedCompanies: companyName ? [companyName] : [],
+        aliasMap
+      });
+      if (companyFilter) {
+        query.companyName = companyFilter;
       }
 
       // SKU filter

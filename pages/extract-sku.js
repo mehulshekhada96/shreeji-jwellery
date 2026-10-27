@@ -19,6 +19,7 @@ import { parseSnapdealPDF } from '../utils/snapdealInventoryParser';
 import { SiAmazon, SiFlipkart } from 'react-icons/si';
 import { FaShoppingBag, FaTag, FaBoxOpen, FaDatabase, FaCheckCircle, FaFileExcel, FaTimes, FaExternalLinkAlt, FaTrash, FaSync, FaMoneyBillWave } from 'react-icons/fa';
 import { toast } from 'react-toastify';
+import { canReadMasterSku, canWriteMasterSku, canReadMasterRate, canWriteMasterRate } from '../lib/constants';
 
 
 export default function ExtractSKU() {
@@ -32,6 +33,7 @@ export default function ExtractSKU() {
   const { featureFlags, checkFeature, loading: flagsLoading } = useFeatureFlags();
   const [allowed, setAllowed] = useState(null);
   const [allowedDirectSort, setAllowedDirectSort] = useState(null);
+  const [currentUser, setCurrentUser] = useState(null);
   const [selectedPdfFile, setSelectedPdfFile] = useState(null); // For Meesho Sort
   const [selectedCsvFile, setSelectedCsvFile] = useState(null); // For Meesho Sort
   const [showManualCsv, setShowManualCsv] = useState(false); // Toggle to show manual CSV upload
@@ -46,7 +48,7 @@ export default function ExtractSKU() {
       const token = localStorage.getItem('token');
       if (!token) return;
       setMasterSkusLoading(true);
-      const res = await axios.get('/api/master-sku?all=true', {
+      const res = await axios.get('/api/master-sku/lookup', {
         headers: { Authorization: `Bearer ${token}` }
       });
       if (res.data?.success && Array.isArray(res.data.skus)) {
@@ -477,6 +479,7 @@ export default function ExtractSKU() {
         const user = JSON.parse(localStorage.getItem('user') || '{}');
         if (!user || !user.role) { setAllowed(false); return; }
         if (!['admin', 'manager'].includes(user.role)) { setAllowed(false); return; }
+        setCurrentUser(user);
         setAllowed(checkFeature('isExtractSKU'));
         // Separate permission + flag for Meesho Direct Sort
         const hasDirectSortPermission = user.role === 'admin' ||
@@ -2078,37 +2081,41 @@ export default function ExtractSKU() {
                 <span>Myntra Sort</span>
               </div>
             </button>
-            <button
-              onClick={() => setSelectedTab('master-sku')}
-              className={`py-3 px-1 border-b-2 font-medium text-sm transition-all duration-200 ${
-                selectedTab === 'master-sku'
-                  ? 'border-indigo-400 text-indigo-400'
-                  : 'border-transparent text-white hover:text-gray-100 hover:border-gray-500'
-              }`}
-            >
-              <div className="flex items-center space-x-2">
-                <FaDatabase className={`w-4 h-4 ${selectedTab === 'master-sku' ? 'text-indigo-400' : 'text-gray-400'}`} title="Master SKU File" />
-                <span>Master SKU File</span>
-                {masterSkus.length > 0 && (
-                  <span className="px-1.5 py-0.5 text-[10px] font-bold rounded-full bg-indigo-500/30 text-indigo-200 border border-indigo-400/30">
-                    {masterSkus.length}
-                  </span>
-                )}
-              </div>
-            </button>
-            <button
-              onClick={() => setSelectedTab('master-rate')}
-              className={`py-3 px-1 border-b-2 font-medium text-sm transition-all duration-200 ${
-                selectedTab === 'master-rate'
-                  ? 'border-emerald-400 text-emerald-400'
-                  : 'border-transparent text-white hover:text-gray-100 hover:border-gray-500'
-              }`}
-            >
-              <div className="flex items-center space-x-2">
-                <FaMoneyBillWave className={`w-4 h-4 ${selectedTab === 'master-rate' ? 'text-emerald-400' : 'text-gray-400'}`} title="Master Rate File" />
-                <span>Master Rate File</span>
-              </div>
-            </button>
+            {canReadMasterSku(currentUser) && (
+              <button
+                onClick={() => setSelectedTab('master-sku')}
+                className={`py-3 px-1 border-b-2 font-medium text-sm transition-all duration-200 ${
+                  selectedTab === 'master-sku'
+                    ? 'border-indigo-400 text-indigo-400'
+                    : 'border-transparent text-white hover:text-gray-100 hover:border-gray-500'
+                }`}
+              >
+                <div className="flex items-center space-x-2">
+                  <FaDatabase className={`w-4 h-4 ${selectedTab === 'master-sku' ? 'text-indigo-400' : 'text-gray-400'}`} title="Master SKU File" />
+                  <span>Master SKU File</span>
+                  {masterSkus.length > 0 && (
+                    <span className="px-1.5 py-0.5 text-[10px] font-bold rounded-full bg-indigo-500/30 text-indigo-200 border border-indigo-400/30">
+                      {masterSkus.length}
+                    </span>
+                  )}
+                </div>
+              </button>
+            )}
+            {canReadMasterRate(currentUser) && (
+              <button
+                onClick={() => setSelectedTab('master-rate')}
+                className={`py-3 px-1 border-b-2 font-medium text-sm transition-all duration-200 ${
+                  selectedTab === 'master-rate'
+                    ? 'border-emerald-400 text-emerald-400'
+                    : 'border-transparent text-white hover:text-gray-100 hover:border-gray-500'
+                }`}
+              >
+                <div className="flex items-center space-x-2">
+                  <FaMoneyBillWave className={`w-4 h-4 ${selectedTab === 'master-rate' ? 'text-emerald-400' : 'text-gray-400'}`} title="Master Rate File" />
+                  <span>Master Rate File</span>
+                </div>
+              </button>
+            )}
             <button
               onClick={() => setSelectedTab('excel')}
               disabled={!flagsLoading && (!featureFlags || featureFlags.isExcelFromPDF !== true)}
@@ -2700,31 +2707,50 @@ export default function ExtractSKU() {
 
         {selectedTab === 'master-sku' && (
           <div className="p-6">
-            <MasterSkuManager
-              onMasterSkusUpdated={fetchMasterSkus}
-              initialSearch={router.query?.search ? String(router.query.search) : ''}
-              onNavigateToRate={(targetOrigin, options = {}) => {
-                setSelectedTab('master-rate');
-                setMainTab('sku_management');
-                const params = new URLSearchParams();
-                params.set('tab', 'master-rate');
-                params.set('search', targetOrigin);
-                if (options.autoAdd) {
-                  params.set('addOrigin', targetOrigin);
-                  if (options.size) params.set('size', options.size);
-                }
-                router.push(`/extract-sku?${params.toString()}`, undefined, { shallow: true });
-              }}
-            />
+            {!canReadMasterSku(currentUser) ? (
+              <div className="p-8 text-center bg-white rounded-xl shadow-sm text-red-600 font-semibold">
+                Access Denied: Read Master SKU permission required.
+              </div>
+            ) : (
+              <MasterSkuManager
+                onMasterSkusUpdated={fetchMasterSkus}
+                canWrite={canWriteMasterSku(currentUser)}
+                canWriteRate={canWriteMasterRate(currentUser)}
+                initialSearch={router.query?.search ? String(router.query.search) : ''}
+                onNavigateToRate={(targetOrigin, options = {}) => {
+                  if (!canReadMasterRate(currentUser)) {
+                    toast.error('Permission denied: Read Master Rate permission required');
+                    return;
+                  }
+                  setSelectedTab('master-rate');
+                  setMainTab('sku_management');
+                  const params = new URLSearchParams();
+                  params.set('tab', 'master-rate');
+                  params.set('search', targetOrigin);
+                  if (options.autoAdd && canWriteMasterRate(currentUser)) {
+                    params.set('addOrigin', targetOrigin);
+                    if (options.size) params.set('size', options.size);
+                  }
+                  router.push(`/extract-sku?${params.toString()}`, undefined, { shallow: true });
+                }}
+              />
+            )}
           </div>
         )}
 
         {selectedTab === 'master-rate' && (
           <div className="p-6">
-            <MasterRateManager
-              onMasterRatesUpdated={fetchMasterSkus}
-              initialSearch={router.query?.search ? String(router.query.search) : ''}
-            />
+            {!canReadMasterRate(currentUser) ? (
+              <div className="p-8 text-center bg-white rounded-xl shadow-sm text-red-600 font-semibold">
+                Access Denied: Read Master Rate permission required.
+              </div>
+            ) : (
+              <MasterRateManager
+                onMasterRatesUpdated={fetchMasterSkus}
+                canWrite={canWriteMasterRate(currentUser)}
+                initialSearch={router.query?.search ? String(router.query.search) : ''}
+              />
+            )}
           </div>
         )}
 

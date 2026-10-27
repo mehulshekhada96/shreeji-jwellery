@@ -5,6 +5,7 @@ import MasterSku from '../../../models/MasterSku';
 import MasterSkuHistory from '../../../models/MasterSkuHistory';
 import MasterSkuSnapshot from '../../../models/MasterSkuSnapshot';
 import { authMiddleware } from '../common/common.services';
+import { canReadMasterSku, canWriteMasterSku } from '../../../lib/constants';
 
 // Increase body/response limit to support large snapshot transfers
 export const config = {
@@ -131,6 +132,13 @@ async function handler(req, res) {
   const userObjectId = user._id ? new mongoose.Types.ObjectId(user._id) : null;
   const userName = user.name || user.username || 'User';
   await connectToDatabase();
+
+  if (method === 'GET' && !canReadMasterSku(user)) {
+    return res.status(403).json({ message: 'Permission denied: Read Master SKU permission required' });
+  }
+  if (['POST', 'DELETE'].includes(method) && !canWriteMasterSku(user)) {
+    return res.status(403).json({ message: 'Permission denied: Write Master SKU permission required' });
+  }
 
   // GET: Fetch snapshot data for download or preview
   if (method === 'GET') {

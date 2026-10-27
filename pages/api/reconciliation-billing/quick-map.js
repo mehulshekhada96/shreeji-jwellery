@@ -4,6 +4,7 @@ import MasterSku from '../../../models/MasterSku';
 import MasterSkuHistory from '../../../models/MasterSkuHistory';
 import MasterRate from '../../../models/MasterRate';
 import MasterRateHistory from '../../../models/MasterRateHistory';
+import { canWriteMasterSku, canWriteMasterRate } from '../../../lib/constants';
 import { authMiddleware } from '../common/common.services';
 
 async function handler(req, res) {
@@ -14,6 +15,13 @@ async function handler(req, res) {
   const user = req.userData;
   if (!user || !user.company) {
     return res.status(401).json({ message: 'Unauthorized or no company associated' });
+  }
+
+  // Quick Map writes to both Master SKU and Master Rate. Both write permissions are required before any writes take place.
+  if (!canWriteMasterSku(user) || !canWriteMasterRate(user)) {
+    return res.status(403).json({
+      message: 'Forbidden: Write permissions for both Master SKU and Master Rate are required for Quick Map'
+    });
   }
 
   const companyId = user.company;

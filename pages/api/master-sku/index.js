@@ -4,6 +4,7 @@ import MasterSkuHistory from '../../../models/MasterSkuHistory';
 import MasterSkuSnapshot from '../../../models/MasterSkuSnapshot';
 import MasterRate from '../../../models/MasterRate';
 import { authMiddleware } from '../common/common.services';
+import { canReadMasterSku, canWriteMasterSku } from '../../../lib/constants';
 
 function escapeRegex(text) {
   return text.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
@@ -22,6 +23,10 @@ async function handler(req, res) {
   if (method === 'GET') {
     try {
       const { all, search, page = 1, limit = 50, sortBy = 'sku', sortOrder = 'asc', rateStatus } = req.query;
+
+      if (!canReadMasterSku(user)) {
+        return res.status(403).json({ message: 'Permission denied: Read Master SKU permission required' });
+      }
 
       // Fast query for sorting components to load the entire mapping
       if (all === 'true') {
@@ -130,6 +135,12 @@ async function handler(req, res) {
     } catch (error) {
       console.error('Error fetching master SKUs:', error);
       return res.status(500).json({ message: 'Failed to fetch master SKUs', error: error.message });
+    }
+  }
+
+  if (['POST', 'PUT', 'DELETE'].includes(method)) {
+    if (!canWriteMasterSku(user)) {
+      return res.status(403).json({ message: 'Permission denied: Write Master SKU permission required' });
     }
   }
 

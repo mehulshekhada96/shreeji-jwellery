@@ -38,8 +38,13 @@ export default async function handler(req, res) {
         token,
         user: {
           username: user.username,
+          name: user.name,
           role: user.role,
-          _id: user._id
+          _id: user._id,
+          company: user.company,
+          permissions: user.permissions || [],
+          assignedCompanies: user.assignedCompanies || [],
+          hasAllCompanyAccess: Boolean(user.hasAllCompanyAccess),
         }
       });
     } catch (error) {

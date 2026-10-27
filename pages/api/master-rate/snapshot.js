@@ -5,6 +5,7 @@ import MasterRate from '../../../models/MasterRate';
 import MasterRateHistory from '../../../models/MasterRateHistory';
 import MasterRateSnapshot from '../../../models/MasterRateSnapshot';
 import { authMiddleware } from '../common/common.services';
+import { canReadMasterRate, canWriteMasterRate } from '../../../lib/constants';
 
 export const config = {
   api: {
@@ -129,6 +130,13 @@ async function handler(req, res) {
   const userObjectId = user._id ? new mongoose.Types.ObjectId(user._id) : null;
   const userName = user.name || user.username || 'User';
   await connectToDatabase();
+
+  if (method === 'GET' && !canReadMasterRate(user)) {
+    return res.status(403).json({ message: 'Permission denied: Read Master Rate permission required' });
+  }
+  if (['POST', 'DELETE'].includes(method) && !canWriteMasterRate(user)) {
+    return res.status(403).json({ message: 'Permission denied: Write Master Rate permission required' });
+  }
 
   if (method === 'GET') {
     try {

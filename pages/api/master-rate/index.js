@@ -5,6 +5,7 @@ import MasterRateHistory from '../../../models/MasterRateHistory';
 import MasterRateSnapshot from '../../../models/MasterRateSnapshot';
 import MasterSku from '../../../models/MasterSku';
 import { authMiddleware } from '../common/common.services';
+import { canReadMasterRate, canWriteMasterRate } from '../../../lib/constants';
 
 function escapeRegex(text) {
   return text.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
@@ -24,6 +25,10 @@ async function handler(req, res) {
     try {
       await connectToDatabase();
       const { all, search, page = 1, limit = 50, sortBy = 'origin', sortOrder = 'asc' } = req.query;
+
+      if (!canReadMasterRate(user)) {
+        return res.status(403).json({ message: 'Permission denied: Read Master Rate permission required' });
+      }
 
       // Fast query to load all master rates (used for lookups or export)
       if (all === 'true') {
@@ -103,6 +108,12 @@ async function handler(req, res) {
     } catch (error) {
       console.error('Error fetching master rates:', error);
       return res.status(500).json({ message: 'Failed to fetch master rates', error: error.message });
+    }
+  }
+
+  if (['POST', 'PUT', 'DELETE'].includes(method)) {
+    if (!canWriteMasterRate(user)) {
+      return res.status(403).json({ message: 'Permission denied: Write Master Rate permission required' });
     }
   }
 
