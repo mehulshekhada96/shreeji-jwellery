@@ -76,6 +76,8 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
     withdrawals: 0,
     bankBalance: 0,
     meeshoPending: 0,
+    companyPersonalEntry: 0,
+    mainCompanyPersonalEntry: 0,
     companyBankBalances: {},
     companyPendingAmounts: {}
   });
@@ -786,7 +788,9 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
       const bankBal = totalBankBalance;
       const meeshoPend = totalMeeshoPending;
       const totalLiquid = bankBal + meeshoPend;
-      const netProfit = totalLiquid - finalGoodsPayable;
+      const companyEntry = Number(finalHisabState.companyPersonalEntry) || 0;
+      const mainCompanyEntry = Number(finalHisabState.mainCompanyPersonalEntry) || 0;
+      const netProfit = (totalLiquid - finalGoodsPayable) + companyEntry + mainCompanyEntry;
 
       // Sheet 1: ફાઈનલ હિસાબ
       const compTitle = getCompanyTitle();
@@ -806,8 +810,8 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
         ['કસ્ટમર રીટર્ન (' + custReturnPercent + '%) ના રૂ.', '', '', '', summary.customerReturnsAmount, '', 'લેવાનું નીકળતું ટોટલ પેમેન્ટ રૂ.', '', '', '', totalLiquid],
         ['કેન્સલ ઓર્ડર ના રૂ.', '', '', '', summary.cancelledAmount],
         ['ટોટલ રીટર્ન રૂ.', '', '', '', totalRet, '', 'માલના ફાઈનલ લેવાના થતાં રૂ.', '', '', '', finalGoodsPayable],
-        ['માલના લેવાના થતાં રૂ.', '', '', '', totalGoodsPayable],
-        ['કંપની માટે લાગતો ખર્ચ', '', '', '', totalExp],
+        ['માલના લેવાના થતાં રૂ.', '', '', '', totalGoodsPayable, '', `ફક્ત નફો ગણવા માટે સબ કંપની (${compTitle}) એ ઉપાડેલી પર્સનલ એન્ટ્રી`, '', '', '', companyEntry],
+        ['કંપની માટે લાગતો ખર્ચ', '', '', '', totalExp, '', 'ફક્ત નફો ગણવા માટે મેઈન કંપની એ ઉપાડેલી પર્સનલ એન્ટ્રી', '', '', '', mainCompanyEntry],
         [`${compTitle} એ ઉપાડેલા ટોટલ રૂ.`, '', '', '', totalUpad, '', 'ટોટલ કંપનીનો વધતો નફો.', '', '', '', netProfit, netProfit],
         ['ટોટલ રીટર્ન રૂ.', '', '', '', totalRet],
         ['ફાઈનલ લેવાના થતાં રૂ.', '', '', '', finalGoodsPayable],
@@ -979,6 +983,16 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
               <FaFileExcel className="w-3 h-3" />
               <span>Export Excel</span>
             </button>
+            <a
+              href="/settings?tab=companyMapping"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1.5 px-3 py-2 bg-white hover:bg-gray-50 text-gray-700 text-xs font-bold rounded-lg border border-gray-300 shadow-2xs transition"
+              title="કંપની નેમ મેપિંગ ખોલો (Company Aliases & Normalization)"
+            >
+              <FaBuilding className="w-3 h-3 text-blue-600" />
+              <span>🏢 મેપિંગ</span>
+            </a>
             <button
               type="button"
               onClick={() => setIsFinalHisabOpen(true)}
@@ -2682,40 +2696,77 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
                     </span>
                   </div>
 
-                  {/* Final Goods Liability deduction */}
+                  {/* Final Goods Liability deduction & Personal Entries */}
                   {(() => {
                     const totalGoods = (Number(finalHisabState.prevBalance) || 0) + (summary.grossInventoryAmount || summary.inventoryAmount);
                     const finalPayable = totalGoods + (Number(finalHisabState.expenses) || 0) - (Number(finalHisabState.withdrawals) || 0) - summary.totalReturnsAmount;
                     const totalLiquid = totalBankBalance + totalMeeshoPending;
-                    const netProfit = totalLiquid - finalPayable;
+                    const companyEntry = Number(finalHisabState.companyPersonalEntry) || 0;
+                    const mainCompanyEntry = Number(finalHisabState.mainCompanyPersonalEntry) || 0;
+                    const netProfit = (totalLiquid - finalPayable) + companyEntry + mainCompanyEntry;
 
                     return (
-                      <div className="space-y-4 pt-3 border-t border-gray-100">
-                        <div className="flex items-center justify-between text-xs">
-                          <span className="text-gray-600 font-medium">માલના ફાઈનલ લેવાના થતાં રૂ. (Liability):</span>
+                      <div className="space-y-3.5 pt-3 border-t border-gray-100">
+                        {/* 1. Final Goods Liability */}
+                        <div className="flex items-center justify-between text-xs bg-gray-50/80 p-2.5 rounded-xl border border-gray-200">
+                          <span className="text-gray-700 font-semibold">માલના ફાઈનલ લેવાના થતાં રૂ. (Liability):</span>
                           <span className="font-bold text-gray-900">{formatINR(finalPayable)}</span>
                         </div>
 
-                        {/* Net Company Profit */}
+                        {/* 2. Sub Company Personal Entry */}
+                        <div className="flex items-center justify-between gap-3 text-xs bg-amber-50/40 p-2.5 rounded-xl border border-amber-200/60">
+                          <label className="text-gray-800 font-medium flex-1">
+                            ફક્ત નફો ગણવા માટે સબ કંપની ({getCompanyTitle()}) એ ઉપાડેલી પર્સનલ એન્ટ્રી:
+                          </label>
+                          <div className="flex items-center gap-1">
+                            <span className="text-amber-600 font-semibold">₹</span>
+                            <input
+                              type="number"
+                              value={finalHisabState.companyPersonalEntry ?? ''}
+                              onChange={(e) => setFinalHisabState(prev => ({ ...prev, companyPersonalEntry: e.target.value }))}
+                              className="w-28 px-2 py-1 border border-amber-300 rounded-lg text-right font-bold text-gray-900 text-xs focus:ring-1 focus:ring-amber-500 focus:outline-none bg-white shadow-2xs"
+                              placeholder="0"
+                            />
+                          </div>
+                        </div>
+
+                        {/* 3. Main Company Personal Entry */}
+                        <div className="flex items-center justify-between gap-3 text-xs bg-amber-50/40 p-2.5 rounded-xl border border-amber-200/60">
+                          <label className="text-gray-800 font-medium flex-1">
+                            ફક્ત નફો ગણવા માટે મેઈન કંપની એ ઉપાડેલી પર્સનલ એન્ટ્રી:
+                          </label>
+                          <div className="flex items-center gap-1">
+                            <span className="text-amber-600 font-semibold">₹</span>
+                            <input
+                              type="number"
+                              value={finalHisabState.mainCompanyPersonalEntry ?? ''}
+                              onChange={(e) => setFinalHisabState(prev => ({ ...prev, mainCompanyPersonalEntry: e.target.value }))}
+                              className="w-28 px-2 py-1 border border-amber-300 rounded-lg text-right font-bold text-gray-900 text-xs focus:ring-1 focus:ring-amber-500 focus:outline-none bg-white shadow-2xs"
+                              placeholder="0"
+                            />
+                          </div>
+                        </div>
+
+                        {/* Net Company Profit Card */}
                         <div className="p-5 rounded-2xl bg-gradient-to-br from-indigo-600 via-blue-600 to-teal-700 text-white shadow-lg space-y-2">
                           <div className="flex items-center justify-between text-xs text-blue-100 font-bold uppercase tracking-wider">
                             <span>ટોટલ કંપનીનો વધતો ચોખ્ખો નફો (Net Company Profit)</span>
-                            <span className="px-2 py-0.5 rounded-full bg-white/20 text-[11px] font-bold">
-                              Liquid - Liability
+                            <span className="px-2 py-0.5 rounded-full bg-white/20 text-[10px] font-bold">
+                              Liquid - Liability + Personal
                             </span>
                           </div>
                           <div className="text-3xl font-black tracking-tight">
                             {formatINR(netProfit)}
                           </div>
                           <div className="text-xs text-blue-100/90 pt-1">
-                            કંપની પાસે હાથ પર રોકડ/બેંક રકમ ચૂકવવાની થતી માલની જવાબદારી બાદ કર્યા પછી.
+                            કંપની પાસે હાથ પર રોકડ/બેંક રકમ ચૂકવવાની થતી માલની જવાબદારી બાદ કર્યા પછી + પર્સનલ ઉપાડ ઉમેરીને.
                           </div>
                         </div>
 
                         {/* Helper comparison info */}
                         <div className="p-3 bg-gray-50 border border-gray-200 rounded-xl text-[11px] text-gray-600 space-y-1">
                           <div className="font-bold text-gray-800">ફાઈનલ હિસાબ ફોર્મ્યુલા (Formula):</div>
-                          <div>• Net Profit = (Bank + Meesho Pending) - (Final Goods Payable)</div>
+                          <div>• Net Profit = (Liquid Funds - Final Goods Liability) + સબ કંપની પર્સનલ એન્ટ્રી + મેઈન કંપની પર્સનલ એન્ટ્રી</div>
                           <div>• Final Goods = Gross Goods + Expense - Withdrawals - Returns</div>
                         </div>
                       </div>

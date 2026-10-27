@@ -1722,6 +1722,8 @@ export default function ExtractSKU() {
 
       const results = {};
 
+      let fallbackMyntraCompanyName = null;
+
       for (let i = 1; i <= totalPages; i++) {
         const progress = 15 + Math.floor(((i / totalPages) * 75));
         setUploadProgress({ 
@@ -1764,7 +1766,24 @@ export default function ExtractSKU() {
             }
           }
         }
-        if (!companyName) companyName = 'Myntra Seller';
+
+        if (companyName) {
+          fallbackMyntraCompanyName = companyName.toUpperCase();
+        } else if (fallbackMyntraCompanyName) {
+          companyName = fallbackMyntraCompanyName;
+        } else {
+          // Company name not detected from Return To:
+          // Ask user to provide company name on the fly
+          const userCompany = window.prompt(
+            "Myntra લેબલમાંથી કંપનીનું નામ મળ્યું નથી.\nકૃપા કરીને આ Myntra PDF માટે કંપનીનું નામ દાખલ કરો (દા.ત. VARNI_JEWELS):"
+          );
+          if (userCompany && userCompany.trim()) {
+            companyName = userCompany.trim().toUpperCase();
+            fallbackMyntraCompanyName = companyName;
+          } else {
+            throw new Error("કંપનીનું નામ દાખલ ન કરવાથી Myntra PDF અપલોડ રદ કરવામાં આવ્યું છે.");
+          }
+        }
 
         // Helper to extract clean SKU lookup string
         const getCleanMyntraSku = (rawStr) => {

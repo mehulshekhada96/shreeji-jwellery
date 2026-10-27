@@ -7,6 +7,7 @@ import MasterSku from '../../models/MasterSku';
 import MasterRate from '../../models/MasterRate';
 import Company from '../../models/company';
 import { authMiddleware } from './common/common.services';
+import { getCompanyMappingInfo, resolveCompanyName } from '../../lib/companyMappingHelper';
 import moment from 'moment';
 
 export const config = {
@@ -90,6 +91,9 @@ async function handler(req, res) {
     // Customer Return % (85% as in Customer Return sheet cell B9 = B8 * 0.85)
     const custReturnPercent = req.query.custReturnPercent !== undefined ? Math.max(0, Math.min(100, Number(req.query.custReturnPercent) || 0)) : 85;
 
+    // Load dynamic company mapping info (aliases + ignored non-company names) from DB
+    const { aliasMap: dynamicAliasMap, ignoredSet: ignoredCompanySet } = await getCompanyMappingInfo(companyId);
+
     const rawCompanies = req.query.companies || req.query.companyName;
     let companiesFilter = [];
     if (Array.isArray(rawCompanies)) {
@@ -99,12 +103,32 @@ async function handler(req, res) {
     }
 
     if (companiesFilter.length > 0) {
-      const companyRegexList = companiesFilter.map(c => new RegExp(`^${c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'));
+      const expandedCompaniesSet = new Set(companiesFilter);
+      // Include any raw alias in MongoDB query if it maps to any selected company
+      for (const [rawUpper, canonicalUpper] of dynamicAliasMap.entries()) {
+        const matchesSelected = companiesFilter.some(
+          sel => sel.trim().toUpperCase() === canonicalUpper || sel.trim().toUpperCase() === rawUpper
+        );
+        if (matchesSelected) {
+          expandedCompaniesSet.add(canonicalUpper);
+          expandedCompaniesSet.add(rawUpper);
+        }
+      }
+
+      const companyRegexList = [...expandedCompaniesSet].map(c => new RegExp(`^${c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'));
       const companyQuery = companyRegexList.length === 1 ? companyRegexList[0] : { $in: companyRegexList };
       invMatch.companyName = companyQuery;
       cancelMatch.companyName = companyQuery;
       returnMatch.companyName = companyQuery;
       custReturnMatch.companyName = companyQuery;
+    } else if (ignoredCompanySet.size > 0) {
+      // Exclude all ignored/deleted non-company names directly at the database level!
+      const ignoredRegexList = [...ignoredCompanySet].map(c => new RegExp(`^${c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'));
+      const notIgnoredCondition = { $nin: ignoredRegexList };
+      invMatch.companyName = notIgnoredCondition;
+      cancelMatch.companyName = notIgnoredCondition;
+      returnMatch.companyName = notIgnoredCondition;
+      custReturnMatch.companyName = notIgnoredCondition;
     }
 
     if (sku && sku.trim()) {
@@ -186,31 +210,32 @@ async function handler(req, res) {
       }
     }
 
-    // Canonical Company Normalization (case-insensitive deduplication, preferring UPPERCASE / TitleCase)
-    const canonicalCompanyMap = new Map(); // lowercase -> best canonical display name
+    // Canonical Company Normalization (via DB aliases first, then uppercase canonical name)
+    const canonicalCompanyMap = new Map(); // UPPERCASE canonical -> display canonical name
 
     const getCanonicalName = (rawName) => {
       const trimmed = (rawName || '').trim();
-      if (!trimmed) return 'Unknown Company';
-      const lower = trimmed.toLowerCase();
-      if (!canonicalCompanyMap.has(lower)) {
-        canonicalCompanyMap.set(lower, trimmed);
-      } else {
-        const existing = canonicalCompanyMap.get(lower);
-        const existingUpper = (existing.match(/[A-Z]/g) || []).length;
-        const currentUpper = (trimmed.match(/[A-Z]/g) || []).length;
-        if (currentUpper > existingUpper) {
-          canonicalCompanyMap.set(lower, trimmed);
-        }
+      if (!trimmed) return 'UNKNOWN COMPANY';
+
+      // 1. Resolve through user-defined dynamic mapping if configured
+      const mapped = resolveCompanyName(trimmed, dynamicAliasMap);
+      const effectiveName = mapped || trimmed.toUpperCase();
+
+      const upper = effectiveName.toUpperCase();
+      if (!canonicalCompanyMap.has(upper)) {
+        canonicalCompanyMap.set(upper, effectiveName);
       }
-      return canonicalCompanyMap.get(lower);
+      return canonicalCompanyMap.get(upper);
     };
 
     const uniqueCompaniesSet = new Set();
     const registerItem = (row) => {
       if (row.companyName) {
-        uniqueCompaniesSet.add(row.companyName.trim());
-        getCanonicalName(row.companyName);
+        const trimmed = row.companyName.trim();
+        if (!ignoredCompanySet.has(trimmed.toUpperCase())) {
+          const canonical = getCanonicalName(trimmed);
+          uniqueCompaniesSet.add(canonical);
+        }
       }
     };
 
@@ -312,13 +337,13 @@ async function handler(req, res) {
     const skuMap = new Map();
 
     const getOrCreateCompany = (name) => {
-      const trimmed = (name || 'Unknown Company').trim();
-      const lower = trimmed.toLowerCase();
+      const trimmed = (name || 'UNKNOWN COMPANY').trim();
       const canonicalName = getCanonicalName(trimmed);
-      if (!companyMap.has(lower)) {
-        companyMap.set(lower, {
+      const canonicalKey = canonicalName.toUpperCase();
+      if (!companyMap.has(canonicalKey)) {
+        companyMap.set(canonicalKey, {
           companyName: canonicalName,
-          companyKey: lower,
+          companyKey: canonicalKey,
           inventoryQty: 0,
           inventoryAmount: 0,
           printCharge: 0,
@@ -336,8 +361,8 @@ async function handler(req, res) {
           skusCount: 0
         });
       }
-      const comp = companyMap.get(lower);
-      comp.companyName = canonicalCompanyMap.get(lower) || canonicalName;
+      const comp = companyMap.get(canonicalKey);
+      comp.companyName = canonicalCompanyMap.get(canonicalKey) || canonicalName;
       return comp;
     };
 
@@ -588,15 +613,10 @@ async function handler(req, res) {
     const monthWise = Array.from(monthMap.values()).sort((a, b) => (a.month < b.month ? 1 : -1));
 
     // Full list of unique companies active in the selected date range across all 4 streams
-    // Collected in-memory during single pass with zero extra database queries
-    const canonicalUniqueComps = new Set();
-    uniqueCompaniesSet.forEach(c => {
-      const clean = (c || '').trim();
-      if (clean) {
-        canonicalUniqueComps.add(getCanonicalName(clean));
-      }
-    });
-    let companiesList = Array.from(canonicalUniqueComps).sort((a, b) => a.localeCompare(b));
+    let companiesList = Array.from(uniqueCompaniesSet)
+      .filter(c => !ignoredCompanySet.has(c.toUpperCase()))
+      .sort((a, b) => a.localeCompare(b));
+
     if (companiesFilter.length > 0) {
       const allDistinctComps = await SkuInventory.distinct('companyName', {
         company: companyId,
@@ -605,9 +625,13 @@ async function handler(req, res) {
       const allCompSet = new Set(companiesList);
       allDistinctComps.forEach(c => {
         const clean = (c || '').trim();
-        if (clean) allCompSet.add(getCanonicalName(clean));
+        if (clean && !ignoredCompanySet.has(clean.toUpperCase())) {
+          allCompSet.add(getCanonicalName(clean));
+        }
       });
-      companiesList = Array.from(allCompSet).sort((a, b) => a.localeCompare(b));
+      companiesList = Array.from(allCompSet)
+        .filter(c => !ignoredCompanySet.has(c.toUpperCase()))
+        .sort((a, b) => a.localeCompare(b));
     }
 
     return res.status(200).json({

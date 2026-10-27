@@ -3,6 +3,7 @@ import SkuInventory from '../../models/SkuInventory';
 import Company from '../../models/company';
 import { USER_ROLES } from '../../lib/constants';
 import connectToDatabase from '../../lib/mongodb';
+import { getCompanyMappingInfo } from '../../lib/companyMappingHelper';
 import zlib from 'zlib';
 import { promisify } from 'util';
 
@@ -41,15 +42,17 @@ async function handler(req, res) {
                 isDeleted: false
             };
 
-            // Platform filter (flipkart, snapdeal, myntra, or meesho)
+            // Platform filter (flipkart, snapdeal, myntra, amazon, or meesho)
             if (platform === 'flipkart') {
                 matchStage.platform = 'flipkart';
             } else if (platform === 'snapdeal') {
                 matchStage.platform = 'snapdeal';
             } else if (platform === 'myntra') {
                 matchStage.platform = 'myntra';
+            } else if (platform === 'amazon') {
+                matchStage.platform = 'amazon';
             } else if (platform === 'meesho') {
-                matchStage.platform = { $nin: ['flipkart', 'snapdeal', 'myntra'] };
+                matchStage.platform = { $nin: ['flipkart', 'snapdeal', 'myntra', 'amazon'] };
             }
 
             // Date filter
@@ -65,9 +68,18 @@ async function handler(req, res) {
                 }
             }
 
-            // Company name filter
+            // Company name filter with mapped alias expansion
             if (companyName) {
-                matchStage.companyName = companyName.trim();
+                const { aliasMap } = await getCompanyMappingInfo(user.company, platform);
+                const targetUpper = companyName.trim().toUpperCase();
+                const matchedRawNames = [targetUpper];
+                for (const [rawUpper, canonicalUpper] of aliasMap.entries()) {
+                    if (canonicalUpper === targetUpper) {
+                        matchedRawNames.push(rawUpper);
+                    }
+                }
+                const regexList = [...new Set(matchedRawNames)].map(n => new RegExp(`^${n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'));
+                matchStage.companyName = regexList.length === 1 ? regexList[0] : { $in: regexList };
             }
 
             // SKU filter
@@ -269,15 +281,17 @@ async function handler(req, res) {
                 },
                 isDeleted: false
             };
-            // Filter by platform for Flipkart, Snapdeal, Myntra, or Meesho
+            // Filter by platform for Flipkart, Snapdeal, Myntra, Amazon, or Meesho
             if (platform === 'flipkart') {
                 deleteQuery.platform = 'flipkart';
             } else if (platform === 'snapdeal') {
                 deleteQuery.platform = 'snapdeal';
             } else if (platform === 'myntra') {
                 deleteQuery.platform = 'myntra';
+            } else if (platform === 'amazon') {
+                deleteQuery.platform = 'amazon';
             } else if (platform === 'meesho') {
-                deleteQuery.platform = { $nin: ['flipkart', 'snapdeal', 'myntra'] };
+                deleteQuery.platform = { $nin: ['flipkart', 'snapdeal', 'myntra', 'amazon'] };
             }
 
             // Soft delete
