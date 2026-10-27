@@ -7,6 +7,7 @@ import PartyDashboard from './party_dashboard';
 import PartyDetails from '../components/partyDetails';
 import CompanyInvoicesList from '../components/CompanyInvoicesList';
 import DabbiManager from '../components/DabbiManager';
+import CompanyMappingManager from '../components/CompanyMappingManager';
 import { checkPermission, PERMISSIONS, USER_ROLES } from '../lib/constants';
 import axios from 'axios';
 
@@ -157,6 +158,15 @@ const SettingsTabs = () => {
                 📦 Dabbi Rates
               </button>
             )}
+            {(user?.role === USER_ROLES.ADMIN || user?.role === USER_ROLES.ADMINISTRATOR) && (
+              <button
+                onClick={() => setSelectedTab('companyMapping')}
+                className={`px-4 py-2 rounded font-medium transition ${
+                  selectedTab === 'companyMapping' ? 'bg-indigo-600 text-white shadow-sm' : 'bg-gray-200 text-black hover:bg-gray-300'
+                }`}>
+                🏢 Company Mapping
+              </button>
+            )}
           </div>
           <div className="mt-4">
             {selectedTab === 'sections' && (
@@ -296,6 +306,11 @@ const SettingsTabs = () => {
             {selectedTab === 'dabbi' && (user?.role === USER_ROLES.ADMIN || user?.role === USER_ROLES.ADMINISTRATOR) && (
               <div className="mt-4">
                 <DabbiManager />
+              </div>
+            )}
+            {selectedTab === 'companyMapping' && (user?.role === USER_ROLES.ADMIN || user?.role === USER_ROLES.ADMINISTRATOR) && (
+              <div className="mt-4">
+                <CompanyMappingManager />
               </div>
             )}
           </div>

@@ -3,6 +3,7 @@ import SkuInventory from '../../models/SkuInventory';
 import Company from '../../models/company';
 import { USER_ROLES } from '../../lib/constants';
 import connectToDatabase from '../../lib/mongodb';
+import { getCompanyMappingInfo, resolveCompanyName } from '../../lib/companyMappingHelper';
 
 async function handler(req, res) {
     await connectToDatabase();
@@ -40,28 +41,34 @@ async function handler(req, res) {
                 query.platform = 'snapdeal';
             } else if (platform === 'myntra') {
                 query.platform = 'myntra';
+            } else if (platform === 'amazon') {
+                query.platform = 'amazon';
             } else if (platform === 'meesho') {
-                query.platform = { $nin: ['flipkart', 'snapdeal', 'myntra'] };
+                query.platform = { $nin: ['flipkart', 'snapdeal', 'myntra', 'amazon'] };
             }
 
             // Get unique dates
             const dates = await SkuInventory.distinct('selectedDate', query);
 
-            // Get unique company names (trim them)
+            // Get unique company names (trim and resolve via mapping)
             const companyNames = await SkuInventory.distinct('companyName', query);
 
-            // Trim all company names and remove empty ones
-            const trimmedCompanyNames = [...new Set(
-                companyNames
-                    .map(name => (name || '').trim())
-                    .filter(name => name)
-            )];
+            const { aliasMap, ignoredSet } = await getCompanyMappingInfo(user.company, platform);
+            const canonicalNamesSet = new Set();
+            companyNames.forEach(name => {
+                if (name && typeof name === 'string' && name.trim()) {
+                    const clean = name.trim();
+                    if (!ignoredSet.has(clean.toUpperCase())) {
+                        canonicalNamesSet.add(resolveCompanyName(clean, aliasMap));
+                    }
+                }
+            });
 
             // Sort dates in descending order
             dates.sort((a, b) => new Date(b) - new Date(a));
 
-            // Sort company names alphabetically
-            trimmedCompanyNames.sort();
+            // Sort canonical company names alphabetically
+            const trimmedCompanyNames = [...canonicalNamesSet].sort((a, b) => a.localeCompare(b));
 
             return res.status(200).json({
                 success: true,
