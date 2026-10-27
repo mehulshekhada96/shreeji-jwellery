@@ -224,6 +224,32 @@ async function run() {
     const mgrA = await createTestUser('manager', ['EXTRACT_SKU'], [CO_ALPHA_CANONICAL], false);
     const mgrB = await createTestUser('manager', ['EXTRACT_SKU'], [CO_BETA], false);
 
+    // Company mapping is admin-only, even if a manager has all master permissions.
+    for (const method of ['get', 'post', 'delete']) {
+      try {
+        await axios({ method, url: `${BASE_URL}/api/company-mapping`,
+          headers: mgrA.headers, data: { action: 'add-alias', rawName: CO_GAMMA, canonicalName: CO_ALPHA_CANONICAL } });
+        assert(false, `Manager mapping ${method} must be denied`);
+      } catch (err) {
+        assert(err.response?.status === 403, `Manager mapping ${method} is denied with 403`);
+      }
+    }
+    const adminMappings = await axios.get(`${BASE_URL}/api/company-mapping`, { headers: adminHeaders });
+    assert(adminMappings.status === 200, 'Admin can read company mappings');
+    const adminAlias = `ADMIN_ALIAS_${RUN_ID}`;
+    const adminMappingWrite = await axios.post(`${BASE_URL}/api/company-mapping`, {
+      action: 'add-alias', rawName: adminAlias, canonicalName: CO_ALPHA_CANONICAL, platform: 'all'
+    }, { headers: adminHeaders });
+    assert(adminMappingWrite.status === 200, 'Admin can add company mappings');
+    const adminAliasDoc = await CompanyMapping.findOne({ company: adminCompanyId, rawName: adminAlias });
+    if (adminAliasDoc) registry.mappingIds.push(adminAliasDoc._id);
+    assert(Boolean(adminAliasDoc), 'Admin mapping persisted');
+    const adminMappingDelete = await axios.delete(`${BASE_URL}/api/company-mapping`, {
+      params: { action: 'remove-alias', rawName: adminAlias }, headers: adminHeaders
+    });
+    assert(adminMappingDelete.status === 200, 'Admin can remove company mappings');
+    assert((await CompanyMapping.findById(adminAliasDoc._id)).isDeleted === true, 'Admin mapping removal persisted');
+
     // 1a: Manager GET /api/user -> 403 Forbidden
     try {
       await axios.get(`${BASE_URL}/api/user`, { headers: mgrA.headers });

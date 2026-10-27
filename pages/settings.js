@@ -8,7 +8,7 @@ import PartyDetails from '../components/partyDetails';
 import CompanyInvoicesList from '../components/CompanyInvoicesList';
 import DabbiManager from '../components/DabbiManager';
 import CompanyMappingManager from '../components/CompanyMappingManager';
-import { checkPermission, PERMISSIONS, USER_ROLES } from '../lib/constants';
+import { checkPermission, PERMISSIONS, USER_ROLES, canManageCompanyMappings } from '../lib/constants';
 import axios from 'axios';
 
 const SettingsTabs = () => {
@@ -158,7 +158,7 @@ const SettingsTabs = () => {
                 📦 Dabbi Rates
               </button>
             )}
-            {(user?.role === USER_ROLES.ADMIN || user?.role === USER_ROLES.ADMINISTRATOR) && (
+            {canManageCompanyMappings(user) && (
               <button
                 onClick={() => setSelectedTab('companyMapping')}
                 className={`px-4 py-2 rounded font-medium transition ${
@@ -308,7 +308,12 @@ const SettingsTabs = () => {
                 <DabbiManager />
               </div>
             )}
-            {selectedTab === 'companyMapping' && (user?.role === USER_ROLES.ADMIN || user?.role === USER_ROLES.ADMINISTRATOR) && (
+            {selectedTab === 'companyMapping' && !canManageCompanyMappings(user) && (
+              <div role="status" className="mt-4 rounded-lg border border-gray-200 bg-white p-6 text-gray-700">
+                Company mapping is managed by your admin. Contact your admin to update account mappings.
+              </div>
+            )}
+            {selectedTab === 'companyMapping' && canManageCompanyMappings(user) && (
               <div className="mt-4">
                 <CompanyMappingManager />
               </div>
