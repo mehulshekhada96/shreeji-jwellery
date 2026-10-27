@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import connectToDatabase from '../../../lib/mongodb';
 import MasterSku from '../../../models/MasterSku';
 import { authMiddleware } from '../common/common.services';
+import { canWriteMasterSku } from '../../../lib/constants';
 
 export const config = {
   api: {
@@ -17,6 +18,10 @@ async function handler(req, res) {
 
   if (!user || !user.company) {
     return res.status(401).json({ message: 'Unauthorized or no company associated' });
+  }
+
+  if (!canWriteMasterSku(user)) {
+    return res.status(403).json({ message: 'Permission denied: Write Master SKU permission required' });
   }
 
   const companyObjectId = new mongoose.Types.ObjectId(user.company);

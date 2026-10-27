@@ -3,7 +3,7 @@ import SkuInventory from '../../models/SkuInventory';
 import Company from '../../models/company';
 import { USER_ROLES } from '../../lib/constants';
 import connectToDatabase from '../../lib/mongodb';
-import { getCompanyMappingInfo, resolveCompanyName } from '../../lib/companyMappingHelper';
+import { getCompanyMappingInfo, resolveCompanyName, buildCompanyQueryFilter, getAssignedCompaniesForUser } from '../../lib/companyMappingHelper';
 
 async function handler(req, res) {
     await connectToDatabase();
@@ -47,13 +47,22 @@ async function handler(req, res) {
                 query.platform = { $nin: ['flipkart', 'snapdeal', 'myntra', 'amazon'] };
             }
 
+            const { aliasMap, ignoredSet } = await getCompanyMappingInfo(user.company, platform);
+
+            const companyFilter = buildCompanyQueryFilter({ user, requestedCompanies: [], aliasMap });
+            if (companyFilter) {
+                query.companyName = companyFilter;
+            } else if (ignoredSet.size > 0) {
+                const ignoredRegexList = [...ignoredSet].map(c => new RegExp(`^${c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'));
+                query.companyName = { $nin: ignoredRegexList };
+            }
+
             // Get unique dates
             const dates = await SkuInventory.distinct('selectedDate', query);
 
             // Get unique company names (trim and resolve via mapping)
             const companyNames = await SkuInventory.distinct('companyName', query);
 
-            const { aliasMap, ignoredSet } = await getCompanyMappingInfo(user.company, platform);
             const canonicalNamesSet = new Set();
             companyNames.forEach(name => {
                 if (name && typeof name === 'string' && name.trim()) {
@@ -68,7 +77,18 @@ async function handler(req, res) {
             dates.sort((a, b) => new Date(b) - new Date(a));
 
             // Sort canonical company names alphabetically
-            const trimmedCompanyNames = [...canonicalNamesSet].sort((a, b) => a.localeCompare(b));
+            let trimmedCompanyNames = [...canonicalNamesSet].sort((a, b) => a.localeCompare(b));
+            const assigned = getAssignedCompaniesForUser(user);
+            if (Array.isArray(assigned)) {
+                if (assigned.length === 0) {
+                    trimmedCompanyNames = [];
+                } else {
+                    const assignedUpperSet = new Set(assigned.map(c => c.toUpperCase()));
+                    trimmedCompanyNames = Array.from(assignedUpperSet)
+                        .filter(c => !ignoredSet.has(c))
+                        .sort((a, b) => a.localeCompare(b));
+                }
+            }
 
             return res.status(200).json({
                 success: true,

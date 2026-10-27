@@ -5,7 +5,7 @@ import CancelledOrder from '../../../models/CancelledOrder';
 import ReturnOrder from '../../../models/ReturnOrder';
 import CustomerReturnOrder from '../../../models/CustomerReturnOrder';
 import { authMiddleware } from '../common/common.services';
-import { USER_ROLES } from '../../../lib/constants';
+import { canManageCompanyMappings } from '../../../lib/constants';
 
 async function handler(req, res) {
   const { method } = req;
@@ -14,6 +14,10 @@ async function handler(req, res) {
     const user = req.userData;
     if (!user || !user.company) {
       return res.status(401).json({ message: 'Unauthorized or no company associated' });
+    }
+
+    if (!canManageCompanyMappings(user)) {
+      return res.status(403).json({ message: 'Forbidden: Admin access required to manage company mappings' });
     }
 
     const companyId = user.company;
@@ -219,12 +223,6 @@ async function handler(req, res) {
         platformCounts,
         activePlatform: targetPlatform,
       });
-    }
-
-    // Role check for modifications
-    const allowedRoles = [USER_ROLES.ADMIN, USER_ROLES.ADMINISTRATOR, USER_ROLES.MANAGER];
-    if (!allowedRoles.includes(user.role)) {
-      return res.status(403).json({ message: 'Insufficient role to manage company mappings' });
     }
 
     // 2. POST: Add alias, create master, ignore (delete), import Excel

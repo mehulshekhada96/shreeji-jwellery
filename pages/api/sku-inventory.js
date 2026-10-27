@@ -3,7 +3,7 @@ import SkuInventory from '../../models/SkuInventory';
 import Company from '../../models/company';
 import { USER_ROLES } from '../../lib/constants';
 import connectToDatabase from '../../lib/mongodb';
-import { getCompanyMappingInfo } from '../../lib/companyMappingHelper';
+import { getCompanyMappingInfo, buildCompanyQueryFilter } from '../../lib/companyMappingHelper';
 import zlib from 'zlib';
 import { promisify } from 'util';
 
@@ -68,18 +68,19 @@ async function handler(req, res) {
                 }
             }
 
-            // Company name filter with mapped alias expansion
-            if (companyName) {
-                const { aliasMap } = await getCompanyMappingInfo(user.company, platform);
-                const targetUpper = companyName.trim().toUpperCase();
-                const matchedRawNames = [targetUpper];
-                for (const [rawUpper, canonicalUpper] of aliasMap.entries()) {
-                    if (canonicalUpper === targetUpper) {
-                        matchedRawNames.push(rawUpper);
-                    }
-                }
-                const regexList = [...new Set(matchedRawNames)].map(n => new RegExp(`^${n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'));
-                matchStage.companyName = regexList.length === 1 ? regexList[0] : { $in: regexList };
+            // Company name filter with mapped alias expansion and manager assigned company isolation
+            const { aliasMap, ignoredSet } = await getCompanyMappingInfo(user.company, platform);
+            const companyFilter = buildCompanyQueryFilter({
+                user,
+                requestedCompanies: companyName ? [companyName] : [],
+                aliasMap
+            });
+
+            if (companyFilter) {
+                matchStage.companyName = companyFilter;
+            } else if (ignoredSet.size > 0) {
+                const ignoredRegexList = [...ignoredSet].map(c => new RegExp(`^${c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'));
+                matchStage.companyName = { $nin: ignoredRegexList };
             }
 
             // SKU filter

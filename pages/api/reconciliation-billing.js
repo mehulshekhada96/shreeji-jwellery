@@ -7,7 +7,7 @@ import MasterSku from '../../models/MasterSku';
 import MasterRate from '../../models/MasterRate';
 import Company from '../../models/company';
 import { authMiddleware } from './common/common.services';
-import { getCompanyMappingInfo, resolveCompanyName } from '../../lib/companyMappingHelper';
+import { getCompanyMappingInfo, resolveCompanyName, buildCompanyQueryFilter, getAssignedCompaniesForUser } from '../../lib/companyMappingHelper';
 import moment from 'moment';
 
 export const config = {
@@ -102,21 +102,13 @@ async function handler(req, res) {
       companiesFilter = rawCompanies.split(',').map(c => c.trim()).filter(Boolean);
     }
 
-    if (companiesFilter.length > 0) {
-      const expandedCompaniesSet = new Set(companiesFilter);
-      // Include any raw alias in MongoDB query if it maps to any selected company
-      for (const [rawUpper, canonicalUpper] of dynamicAliasMap.entries()) {
-        const matchesSelected = companiesFilter.some(
-          sel => sel.trim().toUpperCase() === canonicalUpper || sel.trim().toUpperCase() === rawUpper
-        );
-        if (matchesSelected) {
-          expandedCompaniesSet.add(canonicalUpper);
-          expandedCompaniesSet.add(rawUpper);
-        }
-      }
+    const companyQuery = buildCompanyQueryFilter({
+      user,
+      requestedCompanies: companiesFilter,
+      aliasMap: dynamicAliasMap
+    });
 
-      const companyRegexList = [...expandedCompaniesSet].map(c => new RegExp(`^${c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'));
-      const companyQuery = companyRegexList.length === 1 ? companyRegexList[0] : { $in: companyRegexList };
+    if (companyQuery) {
       invMatch.companyName = companyQuery;
       cancelMatch.companyName = companyQuery;
       returnMatch.companyName = companyQuery;
@@ -613,25 +605,35 @@ async function handler(req, res) {
     const monthWise = Array.from(monthMap.values()).sort((a, b) => (a.month < b.month ? 1 : -1));
 
     // Full list of unique companies active in the selected date range across all 4 streams
-    let companiesList = Array.from(uniqueCompaniesSet)
-      .filter(c => !ignoredCompanySet.has(c.toUpperCase()))
-      .sort((a, b) => a.localeCompare(b));
+    const assigned = getAssignedCompaniesForUser(user);
+    let companiesList = [];
 
-    if (companiesFilter.length > 0) {
-      const allDistinctComps = await SkuInventory.distinct('companyName', {
-        company: companyId,
-        isDeleted: false
-      });
-      const allCompSet = new Set(companiesList);
-      allDistinctComps.forEach(c => {
-        const clean = (c || '').trim();
-        if (clean && !ignoredCompanySet.has(clean.toUpperCase())) {
-          allCompSet.add(getCanonicalName(clean));
-        }
-      });
-      companiesList = Array.from(allCompSet)
+    if (Array.isArray(assigned)) {
+      // For restricted managers, companiesList is strictly their assigned companies (empty if 0 assigned)
+      companiesList = [...assigned]
         .filter(c => !ignoredCompanySet.has(c.toUpperCase()))
         .sort((a, b) => a.localeCompare(b));
+    } else {
+      companiesList = Array.from(uniqueCompaniesSet)
+        .filter(c => !ignoredCompanySet.has(c.toUpperCase()))
+        .sort((a, b) => a.localeCompare(b));
+
+      if (companiesFilter.length > 0) {
+        const allDistinctComps = await SkuInventory.distinct('companyName', {
+          company: companyId,
+          isDeleted: false
+        });
+        const allCompSet = new Set(companiesList);
+        allDistinctComps.forEach(c => {
+          const clean = (c || '').trim();
+          if (clean && !ignoredCompanySet.has(clean.toUpperCase())) {
+            allCompSet.add(getCanonicalName(clean));
+          }
+        });
+        companiesList = Array.from(allCompSet)
+          .filter(c => !ignoredCompanySet.has(c.toUpperCase()))
+          .sort((a, b) => a.localeCompare(b));
+      }
     }
 
     return res.status(200).json({

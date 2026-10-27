@@ -5,6 +5,7 @@ import MasterSku from '../../../models/MasterSku';
 import MasterSkuHistory from '../../../models/MasterSkuHistory';
 import MasterSkuSnapshot from '../../../models/MasterSkuSnapshot';
 import { authMiddleware } from '../common/common.services';
+import { canWriteMasterSku } from '../../../lib/constants';
 
 // Increase body limit to support large chunks if needed
 export const config = {
@@ -21,6 +22,10 @@ async function handler(req, res) {
 
   if (!user || !user.company) {
     return res.status(401).json({ message: 'Unauthorized or no company associated' });
+  }
+
+  if (!canWriteMasterSku(user)) {
+    return res.status(403).json({ message: 'Permission denied: Write Master SKU permission required' });
   }
 
   const companyId = user.company;

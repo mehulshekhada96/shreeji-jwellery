@@ -35,7 +35,7 @@ import {
   FaExternalLinkAlt
 } from 'react-icons/fa';
 
-export default function MasterSkuManager({ onMasterSkusUpdated, onNavigateToRate, initialSearch = '' }) {
+export default function MasterSkuManager({ onMasterSkusUpdated, onNavigateToRate, initialSearch = '', canWrite = true, canWriteRate = true }) {
   const router = useRouter();
   const [selectedOriginDetails, setSelectedOriginDetails] = useState(null);
   const [rateStatusFilter, setRateStatusFilter] = useState('all'); // 'all' | 'configured' | 'not_configured'
@@ -795,14 +795,16 @@ export default function MasterSkuManager({ onMasterSkusUpdated, onNavigateToRate
               <span className="block text-xs uppercase tracking-wider text-gray-300 font-medium">Total Master SKUs</span>
               <span className="text-2xl font-extrabold text-white">{totalCount.toLocaleString()}</span>
             </div>
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              className="flex items-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold rounded-lg shadow-md transition duration-150 cursor-pointer"
-            >
-              <FaUpload className="w-4 h-4" />
-              <span>Upload Master File</span>
-            </button>
-            {totalCount > 0 && (
+            {canWrite && (
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                className="flex items-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold rounded-lg shadow-md transition duration-150 cursor-pointer"
+              >
+                <FaUpload className="w-4 h-4" />
+                <span>Upload Master File</span>
+              </button>
+            )}
+            {canWrite && totalCount > 0 && (
               <button
                 type="button"
                 onClick={() => setShowDeleteCurrentFileModal(true)}
@@ -813,13 +815,15 @@ export default function MasterSkuManager({ onMasterSkusUpdated, onNavigateToRate
                 <span>Delete Current File</span>
               </button>
             )}
-            <input
-              type="file"
-              ref={fileInputRef}
-              onChange={handleFileChange}
-              accept=".xlsx,.xls,.csv"
-              className="hidden"
-            />
+            {canWrite && (
+              <input
+                type="file"
+                ref={fileInputRef}
+                onChange={handleFileChange}
+                accept=".xlsx,.xls,.csv"
+                className="hidden"
+              />
+            )}
           </div>
         </div>
       </div>
@@ -889,17 +893,19 @@ export default function MasterSkuManager({ onMasterSkusUpdated, onNavigateToRate
                             <span className="text-xs text-gray-500 font-medium" title={moment(item.createdAt).format('LLLL')}>
                               {moment(item.createdAt).fromNow()}
                             </span>
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleOpenDeleteFileModal(item);
-                              }}
-                              title="Delete this file record"
-                              className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-md transition cursor-pointer"
-                            >
-                              <FaTrash className="w-3 h-3" />
-                            </button>
+                            {canWrite && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleOpenDeleteFileModal(item);
+                                }}
+                                title="Delete this file record"
+                                className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-md transition cursor-pointer"
+                              >
+                                <FaTrash className="w-3 h-3" />
+                              </button>
+                            )}
                           </div>
                         </div>
                         <div className="flex items-center gap-2 mb-2.5">
@@ -962,17 +968,19 @@ export default function MasterSkuManager({ onMasterSkusUpdated, onNavigateToRate
                           <span className="text-xs text-gray-500 font-medium" title={moment(item.createdAt).format('LLLL')}>
                             {moment(item.createdAt).fromNow()}
                           </span>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleOpenDeleteFileModal(item);
-                            }}
-                            title="Delete this history entry"
-                            className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-md transition cursor-pointer"
-                          >
-                            <FaTrash className="w-3 h-3" />
-                          </button>
+                          {canWrite && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleOpenDeleteFileModal(item);
+                              }}
+                              title="Delete this history entry"
+                              className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-md transition cursor-pointer"
+                            >
+                              <FaTrash className="w-3 h-3" />
+                            </button>
+                          )}
                         </div>
                       </div>
                       <p className="text-sm font-semibold text-gray-800 leading-snug group-hover:text-blue-900 transition-colors">
@@ -1060,16 +1068,18 @@ export default function MasterSkuManager({ onMasterSkusUpdated, onNavigateToRate
           </div>
 
           <div className="flex items-center gap-2 flex-wrap">
-            <button
-              onClick={() => {
-                setFormData({ sku: '', origin: '', size: '' });
-                setShowAddModal(true);
-              }}
-              className="flex items-center gap-1.5 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold rounded-lg shadow-sm transition"
-            >
-              <FaPlus className="w-3.5 h-3.5" />
-              <span>Add SKU</span>
-            </button>
+            {canWrite && (
+              <button
+                onClick={() => {
+                  setFormData({ sku: '', origin: '', size: '' });
+                  setShowAddModal(true);
+                }}
+                className="flex items-center gap-1.5 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold rounded-lg shadow-sm transition"
+              >
+                <FaPlus className="w-3.5 h-3.5" />
+                <span>Add SKU</span>
+              </button>
+            )}
             <button
               onClick={handleExport}
               className="flex items-center gap-1.5 px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-semibold rounded-lg border border-gray-300 transition"
@@ -1247,20 +1257,26 @@ export default function MasterSkuManager({ onMasterSkusUpdated, onNavigateToRate
                         )}
                       </td>
                       <td className="px-6 py-3.5 text-right whitespace-nowrap">
-                        <button
-                          onClick={() => openEditModal(item)}
-                          className="text-blue-600 hover:text-blue-800 p-1.5 hover:bg-blue-100 rounded mr-1 transition"
-                          title="Edit SKU"
-                        >
-                          <FaEdit className="w-4 h-4" />
-                        </button>
-                        <button
-                          onClick={() => openDeleteModal(item)}
-                          className="text-red-500 hover:text-red-700 p-1.5 hover:bg-red-100 rounded transition"
-                          title="Delete SKU"
-                        >
-                          <FaTrash className="w-4 h-4" />
-                        </button>
+                        {canWrite ? (
+                          <>
+                            <button
+                              onClick={() => openEditModal(item)}
+                              className="text-blue-600 hover:text-blue-800 p-1.5 hover:bg-blue-100 rounded mr-1 transition"
+                              title="Edit SKU"
+                            >
+                              <FaEdit className="w-4 h-4" />
+                            </button>
+                            <button
+                              onClick={() => openDeleteModal(item)}
+                              className="text-red-500 hover:text-red-700 p-1.5 hover:bg-red-100 rounded transition"
+                              title="Delete SKU"
+                            >
+                              <FaTrash className="w-4 h-4" />
+                            </button>
+                          </>
+                        ) : (
+                          <span className="text-gray-400 text-xs italic">Read Only</span>
+                        )}
                       </td>
                     </tr>
                   );
@@ -2084,26 +2100,30 @@ export default function MasterSkuManager({ onMasterSkusUpdated, onNavigateToRate
                       <span>Download Excel Snapshot (.xlsx)</span>
                     </button>
 
-                    <button
-                      type="button"
-                      onClick={() => handleOpenRestoreModal(selectedHistoryItem)}
-                      disabled={restoringSnapshot}
-                      className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-2.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-xl text-xs font-bold transition cursor-pointer"
-                      title="Revert Master File to this uploaded version"
-                    >
-                      <FaUndo className="w-3.5 h-3.5" />
-                      <span>Restore This Version</span>
-                    </button>
+                    {canWrite && (
+                      <button
+                        type="button"
+                        onClick={() => handleOpenRestoreModal(selectedHistoryItem)}
+                        disabled={restoringSnapshot}
+                        className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-2.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-xl text-xs font-bold transition cursor-pointer"
+                        title="Revert Master File to this uploaded version"
+                      >
+                        <FaUndo className="w-3.5 h-3.5" />
+                        <span>Restore This Version</span>
+                      </button>
+                    )}
 
-                    <button
-                      type="button"
-                      onClick={() => handleOpenDeleteFileModal(selectedHistoryItem)}
-                      className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-2.5 bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 rounded-xl text-xs font-bold transition cursor-pointer"
-                      title="Delete this master file record and snapshot"
-                    >
-                      <FaTrash className="w-3.5 h-3.5" />
-                      <span>Delete File Record</span>
-                    </button>
+                    {canWrite && (
+                      <button
+                        type="button"
+                        onClick={() => handleOpenDeleteFileModal(selectedHistoryItem)}
+                        className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-2.5 bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 rounded-xl text-xs font-bold transition cursor-pointer"
+                        title="Delete this master file record and snapshot"
+                      >
+                        <FaTrash className="w-3.5 h-3.5" />
+                        <span>Delete File Record</span>
+                      </button>
+                    )}
                   </div>
                 </div>
               )}
@@ -2532,7 +2552,7 @@ export default function MasterSkuManager({ onMasterSkusUpdated, onNavigateToRate
               </div>
 
               {/* Unconfigured Alert & Quick Action */}
-              {selectedOriginDetails.hasRate === false && !isQuickConfiguring && (
+              {selectedOriginDetails.hasRate === false && !isQuickConfiguring && canWriteRate && (
                 <div className="bg-gradient-to-br from-amber-50 to-orange-50 border border-amber-200 rounded-xl p-3.5 space-y-2.5">
                   <div className="flex items-start gap-2.5">
                     <FaExclamationTriangle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
