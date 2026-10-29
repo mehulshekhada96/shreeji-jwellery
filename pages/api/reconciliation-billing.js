@@ -614,26 +614,30 @@ async function handler(req, res) {
         .filter(c => !ignoredCompanySet.has(c.toUpperCase()))
         .sort((a, b) => a.localeCompare(b));
     } else {
-      companiesList = Array.from(uniqueCompaniesSet)
+      const allCompSet = new Set();
+      uniqueCompaniesSet.forEach(c => {
+        const clean = (c || '').trim();
+        if (clean && !ignoredCompanySet.has(clean.toUpperCase())) {
+          allCompSet.add(getCanonicalName(clean));
+        }
+      });
+
+      // ALWAYS include all distinct companies from SkuInventory for this account
+      // so the dropdown list is ALWAYS complete and consistent (never jumping between 33 and 36)
+      const allDistinctComps = await SkuInventory.distinct('companyName', {
+        company: companyId,
+        isDeleted: false
+      });
+      allDistinctComps.forEach(c => {
+        const clean = (c || '').trim();
+        if (clean && !ignoredCompanySet.has(clean.toUpperCase())) {
+          allCompSet.add(getCanonicalName(clean));
+        }
+      });
+
+      companiesList = Array.from(allCompSet)
         .filter(c => !ignoredCompanySet.has(c.toUpperCase()))
         .sort((a, b) => a.localeCompare(b));
-
-      if (companiesFilter.length > 0) {
-        const allDistinctComps = await SkuInventory.distinct('companyName', {
-          company: companyId,
-          isDeleted: false
-        });
-        const allCompSet = new Set(companiesList);
-        allDistinctComps.forEach(c => {
-          const clean = (c || '').trim();
-          if (clean && !ignoredCompanySet.has(clean.toUpperCase())) {
-            allCompSet.add(getCanonicalName(clean));
-          }
-        });
-        companiesList = Array.from(allCompSet)
-          .filter(c => !ignoredCompanySet.has(c.toUpperCase()))
-          .sort((a, b) => a.localeCompare(b));
-      }
     }
 
     return res.status(200).json({

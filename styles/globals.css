@@ -338,12 +338,15 @@ textarea {
 
   /* Unhide invoice modal overlay and children */
   .invoice-modal-overlay,
-  .invoice-modal-overlay * {
+  .invoice-modal-overlay *,
+  .final-hisab-print-overlay,
+  .final-hisab-print-overlay * {
     visibility: visible;
   }
 
   /* Overlay becomes full-width white page */
-  .invoice-modal-overlay {
+  .invoice-modal-overlay,
+  .final-hisab-print-overlay {
     position: absolute !important;
     left: 0 !important;
     top: 0 !important;
@@ -360,7 +363,8 @@ textarea {
   }
 
   /* Remove modal card boundaries, box shadows and borders */
-  .invoice-modal-card {
+  .invoice-modal-card,
+  .final-hisab-print-card {
     position: static !important;
     box-shadow: none !important;
     border: none !important;
@@ -374,13 +378,31 @@ textarea {
   }
 
   /* Printable invoice sheet takes standard margins */
-  .invoice-modal-sheet {
+  .invoice-modal-sheet,
+  .final-hisab-print-sheet {
     max-height: none !important;
     overflow: visible !important;
-    padding: 6mm 10mm !important;
+    padding: 4mm 6mm !important;
     margin: 0 !important;
     width: 100% !important;
     box-sizing: border-box !important;
+  }
+
+  .final-hisab-print-grid {
+    display: grid !important;
+    grid-template-columns: 1fr 1fr !important;
+    gap: 12px !important;
+  }
+
+  .final-hisab-print-overlay input {
+    border: none !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+    width: auto !important;
+    font-size: inherit !important;
+    font-weight: bold !important;
+    text-align: right !important;
   }
 
   /* Hide header action bar and bottom close button */

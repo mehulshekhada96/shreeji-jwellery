@@ -31,7 +31,10 @@ import {
   FaBolt,
   FaEdit,
   FaPlus,
-  FaDownload
+  FaDownload,
+  FaSave,
+  FaHistory,
+  FaTrashAlt
 } from 'react-icons/fa';
 import DabbiSelect from './DabbiSelect';
 import { canWriteMasterSku, canWriteMasterRate } from '../lib/constants';
@@ -81,6 +84,41 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
     mainCompanyPersonalEntry: 0,
     companyBankBalances: {},
     companyPendingAmounts: {}
+  });
+
+  // Final Hisab Snapshot State (Single & Multi Company Saved History)
+  const [lastHisabSnapshot, setLastHisabSnapshot] = useState(null);
+  const [suggestedHisabSnapshot, setSuggestedHisabSnapshot] = useState(null);
+  const [inheritedCompanies, setInheritedCompanies] = useState([]);
+  const [extraCompaniesWithoutHistory, setExtraCompaniesWithoutHistory] = useState([]);
+  const [loadingLastSnapshot, setLoadingLastSnapshot] = useState(false);
+  const [savingHisabSnapshot, setSavingHisabSnapshot] = useState(false);
+  const [showHisabHistoryModal, setShowHisabHistoryModal] = useState(false);
+  const [hisabHistoryTab, setHisabHistoryTab] = useState('current'); // 'current' or 'all'
+  const [hisabHistorySearch, setHisabHistorySearch] = useState('');
+  const [hisabSnapshotsList, setHisabSnapshotsList] = useState([]);
+  const [relatedHisabSnapshots, setRelatedHisabSnapshots] = useState([]);
+  const [loadingHisabList, setLoadingHisabList] = useState(false);
+
+  // Confirmation Modal State for inheriting hisab from previous companies
+  const [confirmInheritModal, setConfirmInheritModal] = useState({
+    isOpen: false,
+    snapshot: null,
+    extraCompanies: []
+  });
+
+  // Preview & Print Saved Historical Snapshot Modal
+  const [previewSnapshotModal, setPreviewSnapshotModal] = useState({
+    isOpen: false,
+    snapshot: null
+  });
+
+  // Project Alert Dialog for deleting snapshot (No browser alert)
+  const [deleteConfirmModal, setDeleteConfirmModal] = useState({
+    isOpen: false,
+    snapshotId: null,
+    companyTitle: '',
+    dateRange: ''
   });
 
   // Quick SKU & Rate Mapping Modal State (રીઅલ-ટાઇમ રેટ અને મેપિંગ)
@@ -247,6 +285,11 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
   // Multi-Company Bank Account & Pending calculation helpers
   const isMultiCompany = selectedCompanies.length > 1;
 
+  const currentScopeKey = useMemo(() => {
+    if (!Array.isArray(selectedCompanies) || selectedCompanies.length === 0) return '__ALL__';
+    return selectedCompanies.map(c => String(c).trim().toLowerCase()).filter(Boolean).sort().join('||');
+  }, [selectedCompanies]);
+
   const totalBankBalance = useMemo(() => {
     if (isMultiCompany) {
       return selectedCompanies.reduce((sum, c) => {
@@ -280,7 +323,7 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
       return {
         ...prev,
         companyBankBalances: updated,
-        bankBalance: total
+        bankBalance: Math.round(total * 100) / 100
       };
     });
   };
@@ -298,10 +341,321 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
       return {
         ...prev,
         companyPendingAmounts: updated,
-        meeshoPending: total
+        meeshoPending: Math.round(total * 100) / 100
       };
     });
   };
+
+  // Fetch last saved hisab snapshot for current company scope (Single or Multi Company)
+  // ONLY runs when:
+  // 1. Hisab tab is open (`isFinalHisabOpen`)
+  // 2. Companies are selected (`selectedCompanies.length > 0`)
+  const fetchLastHisabSnapshot = useCallback(async () => {
+    if (!isFinalHisabOpen || !selectedCompanies || selectedCompanies.length === 0) {
+      setLastHisabSnapshot(null);
+      setSuggestedHisabSnapshot(null);
+      setInheritedCompanies([]);
+      setExtraCompaniesWithoutHistory([]);
+      setLoadingLastSnapshot(false);
+      return;
+    }
+
+    try {
+      setLoadingLastSnapshot(true);
+      const token = localStorage.getItem('token');
+      if (!token) return;
+
+      const res = await axios.get('/api/reconciliation-billing/snapshot', {
+        headers: { Authorization: `Bearer ${token}` },
+        params: {
+          selectedCompanies: JSON.stringify(selectedCompanies),
+          lastOnly: 'true'
+        }
+      });
+
+      if (res.data?.success) {
+        if (res.data.lastSnapshot) {
+          setLastHisabSnapshot(res.data.lastSnapshot);
+          setSuggestedHisabSnapshot(null);
+          setInheritedCompanies([]);
+          setExtraCompaniesWithoutHistory([]);
+          const rawVal = Number(res.data.lastSnapshot.finalPayable) || 0;
+          setFinalHisabState(prev => ({
+            ...prev,
+            prevBalance: Math.round(rawVal * 100) / 100
+          }));
+        } else if (res.data.suggestedSnapshot) {
+          // Subset of companies had previous hisab, and ALL extra companies have NO hisab anywhere
+          setLastHisabSnapshot(null);
+          setSuggestedHisabSnapshot(res.data.suggestedSnapshot);
+          setInheritedCompanies(res.data.inheritedCompanies || []);
+          setExtraCompaniesWithoutHistory(res.data.extraCompaniesWithoutHistory || []);
+          setFinalHisabState(prev => ({
+            ...prev,
+            prevBalance: 0
+          }));
+        } else {
+          setLastHisabSnapshot(null);
+          setSuggestedHisabSnapshot(null);
+          setInheritedCompanies([]);
+          setExtraCompaniesWithoutHistory([]);
+          setFinalHisabState(prev => ({
+            ...prev,
+            prevBalance: 0
+          }));
+        }
+      }
+    } catch (err) {
+      console.error('Error fetching last hisab snapshot:', err);
+    } finally {
+      setLoadingLastSnapshot(false);
+    }
+  }, [isFinalHisabOpen, selectedCompanies]);
+
+  // Fetch full list of saved snapshots for history drawer/modal (tab: 'current' or 'all')
+  const fetchHisabSnapshotsList = useCallback(async (tab = 'current') => {
+    try {
+      setLoadingHisabList(true);
+      const token = localStorage.getItem('token');
+      if (!token) return;
+
+      const params = tab === 'all'
+        ? { allArchive: 'true' }
+        : { selectedCompanies: JSON.stringify(selectedCompanies) };
+
+      const res = await axios.get('/api/reconciliation-billing/snapshot', {
+        headers: { Authorization: `Bearer ${token}` },
+        params
+      });
+
+      if (res.data?.success) {
+        setHisabSnapshotsList(res.data.snapshots || []);
+        if (tab === 'all') {
+          setRelatedHisabSnapshots([]);
+        } else {
+          setRelatedHisabSnapshots(res.data.relatedSnapshots || []);
+          if (res.data.suggestedSnapshot) {
+            setSuggestedHisabSnapshot(res.data.suggestedSnapshot);
+            setInheritedCompanies(res.data.inheritedCompanies || []);
+            setExtraCompaniesWithoutHistory(res.data.extraCompaniesWithoutHistory || []);
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Error fetching hisab snapshots list:', err);
+      toast.error(err.response?.data?.message || err.message || 'Failed to load hisab snapshots history');
+    } finally {
+      setLoadingHisabList(false);
+    }
+  }, [selectedCompanies]);
+
+  // Confirm and set previous balance from an inherited snapshot
+  const handleConfirmInheritSnapshot = (snapshot) => {
+    if (!snapshot) return;
+    const raw = Number(snapshot.finalPayable) || 0;
+    const roundedVal = Math.round(raw * 100) / 100;
+    setFinalHisabState(prev => ({
+      ...prev,
+      prevBalance: roundedVal
+    }));
+    setConfirmInheritModal({ isOpen: false, snapshot: null, extraCompanies: [] });
+    if (showHisabHistoryModal) {
+      setShowHisabHistoryModal(false);
+    }
+    const compTitle = snapshot.companyTitle || (snapshot.selectedCompanies || []).join(' & ');
+    toast.success(`✅ ${compTitle} ના અગાઉના હિસાબની રકમ (${formatINR(roundedVal)}) જૂની બાકીમાં સેટ થઈ ગઈ!`);
+  };
+
+  // Export any historical snapshot directly to formatted Excel workbook
+  const handleExportSnapshotExcel = (snap) => {
+    try {
+      if (!snap) return;
+      const wb = XLSX.utils.book_new();
+      const compTitle = snap.companyTitle || (snap.selectedCompanies || []).join(' & ') || 'Company';
+
+      const finalHisabRows = [
+        ['તા. ' + moment(snap.endDate).format('DD.MM.YYYY'), '', '', '', '', '', 'તા. ' + moment(snap.endDate).format('DD.MM.YYYY')],
+        [`${compTitle} નો હિસાબ`, '', '', '', '', '', `${compTitle} ના હિસાબનું સરવૈયું ફક્ત નફો જોવા માટે`],
+        [`${compTitle} એ લીધેલ માલની એન્ટ્રી`, '', '', '', '', '', `${compTitle} ના બધા બેન્ક ખાતામાં પડેલી રકમ`],
+        ['આગળના હિસાબના લેવાના થતાં રૂ.', '', '', '', snap.prevBalance || 0, '', `${compTitle} બેંક માં પડેલા રૂ.`, '', '', '', snap.bankBalance || 0],
+        ['તા.' + moment(snap.startDate).format('DD.MM.YYYY') + ' થી ' + moment(snap.endDate).format('DD.MM.YYYY') + ' સુધી લેવાના થતાં રૂ.', '', '', '', snap.grossInventoryAmount || 0, '', 'માં પડેલા રૂ.'],
+        ['ટોટલ માલના લેવાના થતાં રૂ.', '', '', '', (snap.prevBalance || 0) + (snap.grossInventoryAmount || 0), '', 'બધા અકાઉન્ટમાં પડેલી ટોટલ રકમ', '', '', '', snap.bankBalance || 0],
+        [`${compTitle} એ ઉપાડેલા રૂ.`, '', '', '', '', '', 'બધા અકાઉન્ટમાંથી નીકળતી આઉટસ્ટેન્ડીંગ રકમ'],
+        ['ટોટલ ઉપાડેલા રૂ.', '', '', '', snap.withdrawals || 0, '', `${compTitle} મીશો / માર્કેટપ્લેસ માંથી લેવાના નીકળતા રૂ.`, '', '', '', snap.meeshoPending || 0],
+        ['*ઉપરની એન્ટ્રી ચોપડામાં તેમજ સ્ટેટમેન્ટની ફાઈલમાં વિગત સાથે મુકેલ છે', '', '', '', '', '', ''],
+        ['રિટર્ન ની એન્ટ્રી', '', '', '', '', '', 'બધા અકાઉન્ટમાંથી નીકળતી આઉટસ્ટેન્ડીંગ ટોટલ રકમ', '', '', '', snap.meeshoPending || 0],
+        ['કુરિયર રીટર્ન (RTO) ના રૂ.', '', '', '', snap.returnsAmount || 0, '', 'અંદાજીત ગોડાઉનમાં પડેલું રીટર્ન', '', '', '', 0],
+        ['કસ્ટમર રીટર્ન ના રૂ.', '', '', '', snap.customerReturnsAmount || 0, '', 'લેવાનું નીકળતું ટોટલ પેમેન્ટ રૂ.', '', '', '', (snap.bankBalance || 0) + (snap.meeshoPending || 0)],
+        ['કેન્સલ ઓર્ડર ના રૂ.', '', '', '', snap.cancelledAmount || 0],
+        ['ટોટલ રીટર્ન રૂ.', '', '', '', snap.totalReturnsAmount || 0, '', 'માલના ફાઈનલ લેવાના થતાં રૂ.', '', '', '', snap.finalPayable || 0],
+        ['માલના લેવાના થતાં રૂ.', '', '', '', (snap.prevBalance || 0) + (snap.grossInventoryAmount || 0), '', `ફક્ત નફો ગણવા માટે સબ કંપની (${compTitle}) એ ઉપાડેલી પર્સનલ એન્ટ્રી`, '', '', '', snap.companyPersonalEntry || 0],
+        ['કંપની માટે લાગતો ખર્ચ', '', '', '', snap.expenses || 0, '', 'ફક્ત નફો ગણવા માટે મેઈન કંપની એ ઉપાડેલી પર્સનલ એન્ટ્રી', '', '', '', snap.mainCompanyPersonalEntry || 0],
+        [`${compTitle} એ ઉપાડેલા ટોટલ રૂ.`, '', '', '', snap.withdrawals || 0, '', 'ટોટલ કંપનીનો વધતો નફો.', '', '', '', snap.netProfit || 0, snap.netProfit || 0],
+        ['ટોટલ રીટર્ન રૂ.', '', '', '', snap.totalReturnsAmount || 0],
+        ['ફાઈનલ લેવાના થતાં રૂ.', '', '', '', snap.finalPayable || 0],
+        ['', '', '', '', '', '', ''],
+        [`${compTitle} ને માલના લેવાના થતાં ફાઈનલ રૂ. (જે આગળના હિસાબમાં લેવા)`, '', '', '', snap.finalPayable || 0]
+      ];
+
+      if (snap.isMultiCompany && snap.selectedCompanies?.length > 1) {
+        finalHisabRows.push(['', '', '', '', '', '', '']);
+        finalHisabRows.push(['--- કંપની-વાઈઝ બેંક અને પેન્ડિંગ વિગત ---', '', '', '', '', '', '']);
+        const bankObj = snap.companyBankBalances instanceof Map ? Object.fromEntries(snap.companyBankBalances) : (snap.companyBankBalances || {});
+        const pendObj = snap.companyPendingAmounts instanceof Map ? Object.fromEntries(snap.companyPendingAmounts) : (snap.companyPendingAmounts || {});
+        snap.selectedCompanies.forEach(comp => {
+          finalHisabRows.push([
+            `${comp} બેંક ખાતામાં પડેલા રૂ.`, '', '', '', bankObj[comp] || 0, '',
+            `${comp} મીશો / માર્કેટપ્લેસ આઉટસ્ટેન્ડીંગ રૂ.`, '', '', '', pendObj[comp] || 0
+          ]);
+        });
+        finalHisabRows.push([
+          'ટોટલ બધા બેંક ખાતામાં રકમ', '', '', '', snap.bankBalance || 0, '',
+          'ટોટલ માર્કેટપ્લેસ આઉટસ્ટેન્ડીંગ', '', '', '', snap.meeshoPending || 0
+        ]);
+      }
+
+      const wsFinalHisab = XLSX.utils.aoa_to_sheet(finalHisabRows);
+      XLSX.utils.book_append_sheet(wb, wsFinalHisab, 'ફાઈનલ હિસાબ');
+
+      const fileCompPrefix = (snap.companyTitle || 'Settlement').replace(/[^a-zA-Z0-9_-]/g, '_');
+      const fileName = `Final_Hisab_${fileCompPrefix}_${snap.startDate}_to_${snap.endDate}.xlsx`;
+      XLSX.writeFile(wb, fileName);
+      toast.success(`Exported ${fileName}!`);
+    } catch (err) {
+      console.error('Error exporting snapshot to Excel:', err);
+      toast.error('Failed to export Excel file');
+    }
+  };
+
+  // Save current hisab as a snapshot
+  const handleSaveHisabSnapshot = async (calculatedFinalPayable, calculatedNetProfit) => {
+    try {
+      setSavingHisabSnapshot(true);
+      const token = localStorage.getItem('token');
+      if (!token) {
+        toast.error('Session expired, please log in again');
+        return;
+      }
+
+      const round2 = (num) => Math.round((Number(num) || 0) * 100) / 100;
+
+      const payload = {
+        selectedCompanies,
+        companyTitle: getCompanyTitle(),
+        startDate,
+        endDate,
+        grossInventoryAmount: round2(summary.grossInventoryAmount || summary.inventoryAmount || 0),
+        inventoryAmount: round2(summary.inventoryAmount || 0),
+        printCharge: round2(summary.printCharge || 0),
+        printRate: Number(printRate) || 2.4,
+        totalReturnsAmount: round2(summary.totalReturnsAmount || 0),
+        returnsAmount: round2(summary.returnsAmount || 0),
+        customerReturnsAmount: round2(summary.customerReturnsAmount || 0),
+        cancelledAmount: round2(summary.cancelledAmount || 0),
+        prevBalance: round2(finalHisabState.prevBalance || 0),
+        expenses: round2(finalHisabState.expenses || 0),
+        withdrawals: round2(finalHisabState.withdrawals || 0),
+        finalPayable: round2(calculatedFinalPayable),
+        bankBalance: round2(totalBankBalance),
+        meeshoPending: round2(totalMeeshoPending),
+        companyBankBalances: Object.fromEntries(
+          Object.entries(finalHisabState.companyBankBalances || {}).map(([k, v]) => [k, round2(v)])
+        ),
+        companyPendingAmounts: Object.fromEntries(
+          Object.entries(finalHisabState.companyPendingAmounts || {}).map(([k, v]) => [k, round2(v)])
+        ),
+        companyPersonalEntry: round2(finalHisabState.companyPersonalEntry || 0),
+        mainCompanyPersonalEntry: round2(finalHisabState.mainCompanyPersonalEntry || 0),
+        netProfit: round2(calculatedNetProfit)
+      };
+
+      const res = await axios.post('/api/reconciliation-billing/snapshot', payload, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+
+      if (res.data?.success && res.data.snapshot) {
+        toast.success(`✅ ફાઈનલ હિસાબ સ્નેપશોટ સેવ થઈ ગયો! (₹${calculatedFinalPayable.toLocaleString('en-IN')})`);
+        setLastHisabSnapshot(res.data.snapshot);
+        fetchHisabSnapshotsList('all');
+      }
+    } catch (err) {
+      console.error('Error saving hisab snapshot:', err);
+      toast.error(err.response?.data?.message || 'Failed to save hisab snapshot');
+    } finally {
+      setSavingHisabSnapshot(false);
+    }
+  };
+
+  // Open project confirmation dialog to delete snapshot (NO browser alert)
+  const handleDeleteSnapshot = (snapshot) => {
+    if (!snapshot) return;
+    const sId = snapshot._id || snapshot;
+    const title = snapshot.companyTitle || (snapshot.selectedCompanies || []).join(' & ') || 'હિસાબ સ્નેપશોટ';
+    const dates = snapshot.startDate && snapshot.endDate
+      ? `${moment(snapshot.startDate).format('DD/MM/YYYY')} થી ${moment(snapshot.endDate).format('DD/MM/YYYY')}`
+      : '';
+    setDeleteConfirmModal({
+      isOpen: true,
+      snapshotId: sId,
+      companyTitle: title,
+      dateRange: dates
+    });
+  };
+
+  // Confirmed delete execution using project modal
+  const handleDeleteSnapshotConfirmed = async () => {
+    const snapshotId = deleteConfirmModal.snapshotId;
+    if (!snapshotId) return;
+
+    try {
+      const token = localStorage.getItem('token');
+      const res = await axios.delete(`/api/reconciliation-billing/snapshot?id=${snapshotId}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+
+      if (res.data?.success) {
+        toast.success('સ્નેપશોટ સફળતાપૂર્વક ડિલીટ થઈ ગયો');
+        setDeleteConfirmModal({ isOpen: false, snapshotId: null, companyTitle: '', dateRange: '' });
+        fetchHisabSnapshotsList('all');
+        fetchLastHisabSnapshot();
+      }
+    } catch (err) {
+      console.error('Error deleting snapshot:', err);
+      toast.error(err.response?.data?.message || 'Failed to delete snapshot');
+    }
+  };
+
+  // Auto-fetch last snapshot ONLY when the Final Hisab modal is open AND companies are selected
+  useEffect(() => {
+    if (isFinalHisabOpen && selectedCompanies && selectedCompanies.length > 0) {
+      fetchLastHisabSnapshot();
+    } else {
+      setLastHisabSnapshot(null);
+      setSuggestedHisabSnapshot(null);
+      setInheritedCompanies([]);
+      setExtraCompaniesWithoutHistory([]);
+    }
+  }, [isFinalHisabOpen, selectedCompanies, fetchLastHisabSnapshot]);
+
+  // Reset final hisab form state when selected companies change so stale data doesn't persist
+  useEffect(() => {
+    setFinalHisabState({
+      prevBalance: 0,
+      expenses: 0,
+      withdrawals: 0,
+      bankBalance: 0,
+      meeshoPending: 0,
+      companyPersonalEntry: 0,
+      mainCompanyPersonalEntry: 0,
+      companyBankBalances: {},
+      companyPendingAmounts: {}
+    });
+  }, [currentScopeKey]);
+
+  // Load all historical snapshots on initial mount and when switching to history tab
+  useEffect(() => {
+    fetchHisabSnapshotsList('all');
+  }, [fetchHisabSnapshotsList]);
 
   // Selected Origin for quick preview modal
   const [previewOrigin, setPreviewOrigin] = useState(null);
@@ -534,10 +888,15 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
     setEndDate(e);
   };
 
-  // Format currency in Indian Rupees
+  // Format currency in Indian Rupees with proper 2 decimal places when paise exist
   const formatINR = (val) => {
-    const num = Number(val) || 0;
-    return '₹' + num.toLocaleString('en-IN', { maximumFractionDigits: 2, minimumFractionDigits: 0 });
+    const num = Math.round((Number(val) || 0) * 100) / 100;
+    const hasDecimals = num % 1 !== 0;
+    const absFormatted = Math.abs(num).toLocaleString('en-IN', {
+      maximumFractionDigits: 2,
+      minimumFractionDigits: hasDecimals ? 2 : 0
+    });
+    return (num < 0 ? '-₹' : '₹') + absFormatted;
   };
 
   // Format quantities
@@ -766,6 +1125,21 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
     return list.filter(c => c.toLowerCase().includes(q));
   }, [companiesSource, companySearch]);
 
+  // Filtered saved snapshots in the history archive / modal
+  const displayedSnapshots = useMemo(() => {
+    let list = hisabSnapshotsList || [];
+    if (!hisabHistorySearch.trim()) return list;
+    const q = hisabHistorySearch.trim().toLowerCase();
+    return list.filter(snap => {
+      const title = (snap.companyTitle || '').toLowerCase();
+      const sDate = (snap.startDate || '').toLowerCase();
+      const eDate = (snap.endDate || '').toLowerCase();
+      const by = (snap.savedByName || '').toLowerCase();
+      const comps = (snap.selectedCompanies || []).join(' ').toLowerCase();
+      return title.includes(q) || sDate.includes(q) || eDate.includes(q) || by.includes(q) || comps.includes(q);
+    });
+  }, [hisabSnapshotsList, hisabHistorySearch]);
+
   const toggleCompany = (companyName) => {
     setSelectedCompanies(prev => {
       if (prev.includes(companyName)) {
@@ -800,20 +1174,22 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
     try {
       const wb = XLSX.utils.book_new();
 
-      const prevBal = Number(finalHisabState.prevBalance) || 0;
-      const grossGoods = (summary.grossInventoryAmount || summary.inventoryAmount);
-      const totalGoodsPayable = prevBal + grossGoods;
-      const totalExp = Number(finalHisabState.expenses) || 0;
-      const totalUpad = Number(finalHisabState.withdrawals) || 0;
-      const totalRet = summary.totalReturnsAmount || (summary.cancelledAmount + summary.returnsAmount + summary.customerReturnsAmount);
-      const finalGoodsPayable = totalGoodsPayable + totalExp - totalUpad - totalRet;
+      const round2 = (num) => Math.round((Number(num) || 0) * 100) / 100;
+
+      const prevBal = round2(finalHisabState.prevBalance);
+      const grossGoods = round2(summary.grossInventoryAmount || summary.inventoryAmount);
+      const totalGoodsPayable = round2(prevBal + grossGoods);
+      const totalExp = round2(finalHisabState.expenses);
+      const totalUpad = round2(finalHisabState.withdrawals);
+      const totalRet = round2(summary.totalReturnsAmount || (summary.cancelledAmount + summary.returnsAmount + summary.customerReturnsAmount));
+      const finalGoodsPayable = round2(totalGoodsPayable + totalExp - totalUpad - totalRet);
       
-      const bankBal = totalBankBalance;
-      const meeshoPend = totalMeeshoPending;
-      const totalLiquid = bankBal + meeshoPend;
-      const companyEntry = Number(finalHisabState.companyPersonalEntry) || 0;
-      const mainCompanyEntry = Number(finalHisabState.mainCompanyPersonalEntry) || 0;
-      const netProfit = (totalLiquid - finalGoodsPayable) + companyEntry + mainCompanyEntry;
+      const bankBal = round2(totalBankBalance);
+      const meeshoPend = round2(totalMeeshoPending);
+      const totalLiquid = round2(bankBal + meeshoPend);
+      const companyEntry = round2(finalHisabState.companyPersonalEntry);
+      const mainCompanyEntry = round2(finalHisabState.mainCompanyPersonalEntry);
+      const netProfit = round2((totalLiquid - finalGoodsPayable) + companyEntry + mainCompanyEntry);
 
       // Sheet 1: ફાઈનલ હિસાબ
       const compTitle = getCompanyTitle();
@@ -953,6 +1329,10 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
     }
   };
 
+  const handlePrintFinalHisab = () => {
+    window.print();
+  };
+
   const { summary } = billingData;
   const totalReturnQty = summary.returnsQty + summary.customerReturnsQty;
   const overallReturnRate = summary.inventoryQty > 0
@@ -1016,6 +1396,18 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
               <FaBuilding className="w-3 h-3 text-blue-600" />
               <span>🏢 મેપિંગ</span>
             </a>
+            <button
+              type="button"
+              onClick={() => {
+                setActiveView('history');
+                fetchHisabSnapshotsList('all');
+              }}
+              className="flex items-center gap-1.5 px-3 py-2 bg-white hover:bg-amber-50 text-amber-800 text-xs font-bold rounded-lg border border-amber-300 shadow-2xs transition cursor-pointer"
+              title="તમામ સેવ થયેલ હિસાબોનું આર્કાઇવ જુઓ, પ્રિન્ટ કરો કે એક્સેલ ડાઉનલોડ કરો"
+            >
+              <FaHistory className="w-3 h-3 text-amber-600" />
+              <span>📜 સેવ હિસાબ આર્કાઇવ ({hisabSnapshotsList.length})</span>
+            </button>
             <button
               type="button"
               onClick={() => setIsFinalHisabOpen(true)}
@@ -1431,15 +1823,34 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
               <FaBoxOpen className="w-3.5 h-3.5 text-purple-600" />
               <span>SKU Line Items ({displayedSkus.length})</span>
             </button>
+            <button
+              type="button"
+              onClick={() => {
+                setActiveView('history');
+                fetchHisabSnapshotsList('all');
+              }}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition cursor-pointer ${
+                activeView === 'history'
+                  ? 'bg-white text-gray-900 shadow-xs'
+                  : 'text-gray-600 hover:text-gray-900'
+              }`}
+            >
+              <FaHistory className="w-3.5 h-3.5 text-amber-600" />
+              <span>Snapshots History ({hisabSnapshotsList.length})</span>
+            </button>
           </div>
 
           <div className="text-xs text-gray-500 font-medium">
-            Showing records from <span className="font-bold text-gray-800">{moment(startDate).format('DD MMM YYYY')}</span> to <span className="font-bold text-gray-800">{moment(endDate).format('DD MMM YYYY')}</span>
+            {activeView === 'history' ? (
+              <span>કુલ સેવ સ્નેપશોટ: <strong className="text-gray-800">{displayedSnapshots.length}</strong></span>
+            ) : (
+              <span>Showing records from <strong className="text-gray-800">{moment(startDate).format('DD MMM YYYY')}</strong> to <strong className="text-gray-800">{moment(endDate).format('DD MMM YYYY')}</strong></span>
+            )}
           </div>
         </div>
 
         {/* Loading Spinner */}
-        {loading ? (
+        {loading && activeView !== 'history' ? (
           <div className="py-20 text-center text-gray-500">
             <div className="flex flex-col items-center justify-center space-y-3">
               <FaSync className="animate-spin text-emerald-600 w-8 h-8" />
@@ -2438,6 +2849,184 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
                 )}
               </div>
             )}
+
+            {/* VIEW 4: SNAPSHOTS HISTORY (ALL SAVED HISAB ARCHIVE - PRINT, DOWNLOAD, DELETE ONLY) */}
+            {activeView === 'history' && (
+              <div className="p-4 sm:p-6 space-y-5 bg-white">
+                {/* Header Bar */}
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-gray-100">
+                  <div>
+                    <h3 className="text-base font-black text-gray-900 flex items-center gap-2">
+                      <FaHistory className="text-amber-600 w-4 h-4" />
+                      <span>સેવ કરેલ ફાઈનલ હિસાબ સ્નેપશોટ હિસ્ટ્રી (Saved Snapshots History)</span>
+                    </h3>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      અગાઉ સેવ કરેલા તમામ ફાઈનલ હિસાબ પ્રિન્ટ (Print), એક્સેલ ડાઉનલોડ (Download) અથવા ડિલીટ (Delete) કરવા માટે.
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-2.5">
+                    {/* Search Bar */}
+                    <div className="relative w-64">
+                      <FaSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-3 h-3" />
+                      <input
+                        type="text"
+                        value={hisabHistorySearch}
+                        onChange={(e) => setHisabHistorySearch(e.target.value)}
+                        placeholder="કંપની નામ, તારીખ કે યુઝર શોધો..."
+                        className="w-full pl-8 pr-7 py-2 bg-gray-50 border border-gray-200 rounded-xl text-xs text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 focus:bg-white"
+                      />
+                      {hisabHistorySearch && (
+                        <button
+                          type="button"
+                          onClick={() => setHisabHistorySearch('')}
+                          className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 cursor-pointer"
+                        >
+                          <FaTimes className="w-3 h-3" />
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Refresh */}
+                    <button
+                      type="button"
+                      disabled={loadingHisabList}
+                      onClick={() => fetchHisabSnapshotsList('all')}
+                      className="flex items-center gap-1.5 px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-bold rounded-xl transition cursor-pointer"
+                      title="રિફ્રેશ કરો"
+                    >
+                      <FaSync className={`w-3 h-3 ${loadingHisabList ? 'animate-spin text-blue-600' : ''}`} />
+                      <span>રિફ્રેશ</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Content */}
+                {loadingHisabList ? (
+                  <div className="py-20 text-center text-gray-500">
+                    <FaSync className="animate-spin text-amber-600 w-8 h-8 mx-auto mb-3" />
+                    <p className="text-sm font-semibold text-gray-700">સ્નેપશોટ હિસ્ટ્રી લોડ થઈ રહી છે...</p>
+                  </div>
+                ) : displayedSnapshots.length === 0 ? (
+                  <div className="py-16 text-center text-gray-400">
+                    <FaHistory className="w-12 h-12 text-gray-300 mx-auto mb-3" />
+                    <p className="text-base font-bold text-gray-700">હજુ સુધી કોઈ હિસાબ સ્નેપશોટ સેવ થયેલ નથી</p>
+                    <p className="text-xs text-gray-400 mt-1 max-w-md mx-auto">
+                      {hisabHistorySearch
+                        ? 'તમારી શોધ મુજબ કોઈ હિસાબ મળ્યો નથી. સર્ચ શબ્દ બદલીને જુઓ.'
+                        : 'જ્યારે તમે "ફાઈનલ હિસાબ" માં જઈને "સ્નેપશોટ સેવ કરો" બટન દબાવશો, ત્યારે તમામ હિસાબ કાયમી ધોરણે અહીં સેવ રહેશે.'}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto rounded-xl border border-gray-200 shadow-2xs">
+                    <table className="w-full text-left border-collapse text-xs">
+                      <thead>
+                        <tr className="bg-gray-50 text-[11px] font-bold text-gray-600 uppercase tracking-wider border-b border-gray-200">
+                          <th className="px-4 py-3.5">કંપની / ગ્રૂપ</th>
+                          <th className="px-4 py-3.5">સમયગાળો (Period)</th>
+                          <th className="px-4 py-3.5 text-right">માલનો હિસાબ</th>
+                          <th className="px-4 py-3.5 text-right">કુલ રીટર્ન</th>
+                          <th className="px-4 py-3.5 text-right font-black text-gray-900">ફાઈનલ લેવાના થતાં રૂ.</th>
+                          <th className="px-4 py-3.5 text-right">કંપની નફો</th>
+                          <th className="px-4 py-3.5 text-center">સેવ કરનાર</th>
+                          <th className="px-4 py-3.5 text-center">ક્રિયાઓ (Actions)</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100 bg-white">
+                        {displayedSnapshots.map((snap) => {
+                          const compTitle = snap.companyTitle || (snap.selectedCompanies || []).join(' & ') || 'Company';
+                          const isMulti = snap.isMultiCompany || (snap.selectedCompanies || []).length > 1;
+
+                          return (
+                            <tr key={snap._id} className="hover:bg-amber-50/20 transition group">
+                              <td className="px-4 py-3.5 font-bold text-gray-900">
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span>{compTitle}</span>
+                                  {isMulti && (
+                                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-50 text-purple-700 border border-purple-200">
+                                      Multi-Company
+                                    </span>
+                                  )}
+                                </div>
+                                {snap.note && (
+                                  <div className="text-[11px] text-gray-400 font-normal italic mt-0.5">
+                                    {snap.note}
+                                  </div>
+                                )}
+                              </td>
+                              <td className="px-4 py-3.5 font-medium text-gray-700 whitespace-nowrap">
+                                <div className="flex items-center gap-1">
+                                  <FaCalendarAlt className="text-gray-400 w-3 h-3" />
+                                  <span>
+                                    {moment(snap.startDate).format('DD/MM/YYYY')} થી {moment(snap.endDate).format('DD/MM/YYYY')}
+                                  </span>
+                                </div>
+                              </td>
+                              <td className="px-4 py-3.5 text-right font-mono text-gray-800">
+                                {formatINR(snap.grossInventoryAmount || snap.inventoryAmount)}
+                              </td>
+                              <td className="px-4 py-3.5 text-right font-mono text-rose-700">
+                                -{formatINR(snap.totalReturnsAmount)}
+                              </td>
+                              <td className="px-4 py-3.5 text-right font-mono font-black text-sm">
+                                <span className={snap.finalPayable >= 0 ? 'text-emerald-700' : 'text-rose-700'}>
+                                  {formatINR(snap.finalPayable)}
+                                </span>
+                              </td>
+                              <td className="px-4 py-3.5 text-right font-mono font-bold text-indigo-700">
+                                {formatINR(snap.netProfit)}
+                              </td>
+                              <td className="px-4 py-3.5 text-center text-gray-500 whitespace-nowrap">
+                                <div className="font-semibold text-gray-700">{snap.savedByName || 'User'}</div>
+                                <div className="text-[10px] text-gray-400">
+                                  {moment(snap.createdAt).format('DD/MM/YY, hh:mm A')}
+                                </div>
+                              </td>
+                              <td className="px-4 py-3.5 text-center whitespace-nowrap">
+                                <div className="flex items-center justify-center gap-1.5">
+                                  {/* 1. PRINT BUTTON */}
+                                  <button
+                                    type="button"
+                                    onClick={() => setPreviewSnapshotModal({ isOpen: true, snapshot: snap })}
+                                    className="flex items-center gap-1 px-2.5 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-lg text-xs font-bold transition cursor-pointer border border-blue-200 shadow-2xs"
+                                    title="આ હિસાબ પ્રિન્ટ કરો (Print Settlement Sheet)"
+                                  >
+                                    <FaPrint className="w-3 h-3" />
+                                    <span>Print</span>
+                                  </button>
+
+                                  {/* 2. DOWNLOAD EXCEL BUTTON */}
+                                  <button
+                                    type="button"
+                                    onClick={() => handleExportSnapshotExcel(snap)}
+                                    className="flex items-center gap-1 px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded-lg text-xs font-bold transition cursor-pointer border border-emerald-200 shadow-2xs"
+                                    title="આ હિસાબની એક્સેલ ફાઇલ ડાઉનલોડ કરો (Download Excel)"
+                                  >
+                                    <FaFileExcel className="w-3 h-3" />
+                                    <span>Download</span>
+                                  </button>
+
+                                  {/* 3. DELETE BUTTON */}
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDeleteSnapshot(snap)}
+                                    className="flex items-center gap-1 px-2 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-lg text-xs font-bold transition cursor-pointer border border-rose-200"
+                                    title="આ સ્નેપશોટ કાયમી ડિલીટ કરો"
+                                  >
+                                    <FaTrashAlt className="w-3 h-3" />
+                                    <span>Delete</span>
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
           </>
         )}
       </div>
@@ -2446,10 +3035,10 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
       {/* ફાઈનલ હિસાબ (FINAL SETTLEMENT LEDGER MODAL)                                */}
       {/* ========================================================================= */}
       {isFinalHisabOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-black/60 backdrop-blur-xs animate-in fade-in">
-          <div className="bg-white rounded-3xl shadow-2xl border border-gray-200 w-full max-w-5xl max-h-[92vh] overflow-y-auto flex flex-col">
+        <div className="final-hisab-print-overlay fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-black/60 backdrop-blur-xs animate-in fade-in">
+          <div className="final-hisab-print-card bg-white rounded-3xl shadow-2xl border border-gray-200 w-full max-w-5xl max-h-[92vh] overflow-y-auto flex flex-col">
             {/* Modal Header */}
-            <div className="p-5 sm:p-6 border-b border-gray-100 flex items-center justify-between bg-gradient-to-r from-blue-900 via-indigo-900 to-slate-900 text-white rounded-t-3xl">
+            <div className="p-5 sm:p-6 border-b border-gray-100 flex items-center justify-between bg-gradient-to-r from-blue-900 via-indigo-900 to-slate-900 text-white rounded-t-3xl print:rounded-none print:py-3 print:px-4">
               <div>
                 <div className="flex items-center gap-2">
                   <span className="px-2.5 py-0.5 rounded-full bg-blue-500/30 text-blue-200 text-xs font-bold border border-blue-400/30">
@@ -2463,18 +3052,49 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
                   {getCompanyTitle()} નો ફાઈનલ હિસાબ (Final Settlement)
                 </h2>
               </div>
-              <button
-                type="button"
-                onClick={() => setIsFinalHisabOpen(false)}
-                className="w-9 h-9 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition cursor-pointer"
-              >
-                <FaTimes className="w-4 h-4" />
-              </button>
+              <div className="flex items-center gap-2 no-print">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setHisabHistoryTab('current');
+                    setShowHisabHistoryModal(true);
+                    fetchHisabSnapshotsList('current');
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold transition cursor-pointer border border-white/20 shadow-xs"
+                  title="સેવ થયેલ હિસાબ સ્નેપશોટ હિસ્ટ્રી જુઓ"
+                >
+                  <FaHistory className="w-3.5 h-3.5 text-amber-300" />
+                  <span>હિસ્ટ્રી સ્નેપશોટ</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handlePrintFinalHisab}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold transition cursor-pointer border border-white/20 shadow-xs"
+                  title="Print ફાઈનલ હિસાબ"
+                >
+                  <FaPrint className="w-3.5 h-3.5 text-blue-300" />
+                  <span className="hidden sm:inline">Print</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsFinalHisabOpen(false)}
+                  className="w-9 h-9 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition cursor-pointer"
+                >
+                  <FaTimes className="w-4 h-4" />
+                </button>
+              </div>
             </div>
 
             {/* Modal Body: Two Column Settlement Sheet */}
-            <div className="p-5 sm:p-6 space-y-6 flex-1 bg-gray-50/50">
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div className="final-hisab-print-sheet p-5 sm:p-6 space-y-6 flex-1 bg-gray-50/50 print:bg-white print:p-2 print:space-y-4">
+              {/* Print Only Header Meta */}
+              <div className="hidden print:flex items-center justify-between text-[11px] text-gray-600 pb-2 border-b border-gray-300 font-medium">
+                <span>કંપની: <strong className="text-black">{getCompanyTitle()}</strong></span>
+                <span>સમયગાળો: <strong>{moment(startDate).format('DD/MM/YYYY')} થી {moment(endDate).format('DD/MM/YYYY')}</strong></span>
+                <span>પ્રિન્ટ તારીખ: <strong>{moment().format('DD/MM/YYYY, hh:mm A')}</strong></span>
+              </div>
+
+              <div className="final-hisab-print-grid grid grid-cols-1 lg:grid-cols-2 gap-6">
                 
                 {/* ================= LEFT COLUMN: GOODS SETTLEMENT ================= */}
                 <div className="bg-white rounded-2xl border border-gray-200 shadow-xs p-5 space-y-4">
@@ -2487,20 +3107,95 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
                   </div>
 
                   {/* 1. Previous Balance */}
-                  <div className="flex items-center justify-between gap-3 text-xs">
-                    <label className="text-gray-700 font-medium flex-1">
-                      આગળના હિસાબના લેવાના થતાં રૂ. (જૂની બાકી):
-                    </label>
-                    <div className="flex items-center gap-1">
-                      <span className="text-gray-400 font-semibold">₹</span>
-                      <input
-                        type="number"
-                        value={finalHisabState.prevBalance}
-                        onChange={(e) => setFinalHisabState(prev => ({ ...prev, prevBalance: e.target.value }))}
-                        className="w-28 px-2 py-1 border border-gray-300 rounded-lg text-right font-bold text-gray-800 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none"
-                        placeholder="0"
-                      />
+                  <div className="space-y-1.5 bg-gray-50/70 p-2.5 rounded-xl border border-gray-200">
+                    <div className="flex items-center justify-between gap-3 text-xs">
+                      <div className="flex-1">
+                        <label className="text-gray-800 font-bold flex items-center gap-1.5">
+                          <span>આગળના હિસાબના લેવાના થતાં રૂ. (જૂની બાકી):</span>
+                        </label>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <span className="text-gray-400 font-semibold">₹</span>
+                        <input
+                          type="number"
+                          step="0.01"
+                          value={finalHisabState.prevBalance ?? ''}
+                          onChange={(e) => setFinalHisabState(prev => ({ ...prev, prevBalance: e.target.value }))}
+                          onBlur={() => {
+                            if (finalHisabState.prevBalance !== '' && finalHisabState.prevBalance !== undefined && finalHisabState.prevBalance !== null && !isNaN(finalHisabState.prevBalance)) {
+                              setFinalHisabState(prev => ({
+                                ...prev,
+                                prevBalance: Math.round(Number(prev.prevBalance) * 100) / 100
+                              }));
+                            }
+                          }}
+                          className="w-36 px-2.5 py-1.5 border border-gray-300 rounded-lg text-right font-bold text-gray-900 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none bg-white shadow-2xs"
+                          placeholder="0.00"
+                        />
+                      </div>
                     </div>
+
+                    {/* Last Saved Snapshot Badge & Auto-fill Info */}
+                    {loadingLastSnapshot ? (
+                      <div className="text-[11px] text-gray-400 flex items-center gap-1">
+                        <FaSync className="w-2.5 h-2.5 animate-spin text-blue-500" />
+                        <span>છેલ્લો સેવ થયેલ હિસાબ ચેક થઈ રહ્યો છે...</span>
+                      </div>
+                    ) : lastHisabSnapshot ? (
+                      <div className="flex items-center justify-between text-[11px] pt-1.5 border-t border-gray-200/70">
+                        <span className="text-gray-600 flex items-center gap-1">
+                          <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block"></span>
+                          <span>છેલ્લો હિસાબ: <strong className="text-gray-800 font-mono">{formatINR(lastHisabSnapshot.finalPayable)}</strong></span>
+                          <span className="text-gray-400">({moment(lastHisabSnapshot.startDate).format('DD/MM/YY')} થી {moment(lastHisabSnapshot.endDate).format('DD/MM/YY')})</span>
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const raw = Number(lastHisabSnapshot.finalPayable) || 0;
+                            setFinalHisabState(prev => ({ ...prev, prevBalance: Math.round(raw * 100) / 100 }));
+                          }}
+                          className="px-2 py-0.5 rounded-md bg-blue-100 hover:bg-blue-200 text-blue-800 font-bold transition text-[10px] cursor-pointer"
+                          title="છેલ્લા હિસાબની રકમ અહી સેટ કરો"
+                        >
+                          આ રકમ લો
+                        </button>
+                      </div>
+                    ) : suggestedHisabSnapshot ? (
+                      <div className="pt-2 border-t border-amber-200/70 space-y-1.5 bg-amber-50/70 p-2 rounded-lg">
+                        <div className="flex items-center justify-between text-[11px]">
+                          <span className="text-amber-900 font-bold flex items-center gap-1">
+                            <span className="w-2 h-2 rounded-full bg-amber-500 inline-block animate-pulse"></span>
+                            <span>અગાઉનો સેવ હિસાબ ({suggestedHisabSnapshot.companyTitle || inheritedCompanies.join(' & ')}): <strong className="font-mono text-amber-950">{formatINR(suggestedHisabSnapshot.finalPayable)}</strong></span>
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setConfirmInheritModal({
+                              isOpen: true,
+                              snapshot: suggestedHisabSnapshot,
+                              extraCompanies: extraCompaniesWithoutHistory
+                            })}
+                            className="px-2 py-0.5 rounded-md bg-amber-600 hover:bg-amber-700 text-white font-bold transition text-[10px] cursor-pointer shadow-2xs"
+                            title="આ અગાઉના હિસાબની રકમ લેવા પુષ્ટિ કરો"
+                          >
+                            આ રકમ લો
+                          </button>
+                        </div>
+                        <div className="text-[10.5px] text-amber-800 flex items-center justify-between gap-1 flex-wrap">
+                          <span>
+                            {extraCompaniesWithoutHistory.length > 0 ? (
+                              <span>નવી કંપની <strong className="text-amber-950 font-bold">{extraCompaniesWithoutHistory.join(', ')}</strong> નો કોઈ જૂનો હિસાબ નથી.</span>
+                            ) : (
+                              <span>આ ગ્રૂપનો અગાઉનો હિસાબ ઉપલબ્ધ છે.</span>
+                            )}
+                          </span>
+                          <span className="text-amber-700/80">({moment(suggestedHisabSnapshot.startDate).format('DD/MM/YY')} થી {moment(suggestedHisabSnapshot.endDate).format('DD/MM/YY')})</span>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="text-[11px] text-gray-400 italic">
+                        {isMultiCompany ? 'આ મલ્ટી-કંપની સિલેક્શન માટે કોઈ અગાઉનો સેવ થયેલ હિસાબ નથી.' : 'આ કંપની માટે કોઈ અગાઉનો સેવ થયેલ હિસાબ નથી.'}
+                      </div>
+                    )}
                   </div>
 
                   {/* 2. Dispatched Goods for period */}
@@ -2520,7 +3215,7 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
                   <div className="p-2.5 rounded-xl bg-blue-50/70 border border-blue-200/60 flex items-center justify-between text-xs font-bold text-blue-900">
                     <span>ટોટલ માલના લેવાના થતાં રૂ. (E6):</span>
                     <span className="text-sm font-black">
-                      {formatINR((Number(finalHisabState.prevBalance) || 0) + (summary.grossInventoryAmount || summary.inventoryAmount))}
+                      {formatINR(Math.round(((Number(finalHisabState.prevBalance) || 0) + (summary.grossInventoryAmount || summary.inventoryAmount || 0)) * 100) / 100)}
                     </span>
                   </div>
 
@@ -2564,8 +3259,14 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
                         <span className="text-gray-400 font-semibold">₹</span>
                         <input
                           type="number"
-                          value={finalHisabState.expenses}
+                          step="0.01"
+                          value={finalHisabState.expenses ?? ''}
                           onChange={(e) => setFinalHisabState(prev => ({ ...prev, expenses: e.target.value }))}
+                          onBlur={() => {
+                            if (finalHisabState.expenses !== '' && !isNaN(finalHisabState.expenses)) {
+                              setFinalHisabState(prev => ({ ...prev, expenses: Math.round(Number(prev.expenses) * 100) / 100 }));
+                            }
+                          }}
                           className="w-28 px-2 py-1 border border-gray-300 rounded-lg text-right font-bold text-gray-800 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none"
                           placeholder="0"
                         />
@@ -2580,8 +3281,14 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
                         <span className="text-gray-400 font-semibold">₹</span>
                         <input
                           type="number"
-                          value={finalHisabState.withdrawals}
+                          step="0.01"
+                          value={finalHisabState.withdrawals ?? ''}
                           onChange={(e) => setFinalHisabState(prev => ({ ...prev, withdrawals: e.target.value }))}
+                          onBlur={() => {
+                            if (finalHisabState.withdrawals !== '' && !isNaN(finalHisabState.withdrawals)) {
+                              setFinalHisabState(prev => ({ ...prev, withdrawals: Math.round(Number(prev.withdrawals) * 100) / 100 }));
+                            }
+                          }}
                           className="w-28 px-2 py-1 border border-gray-300 rounded-lg text-right font-bold text-gray-800 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none"
                           placeholder="0"
                         />
@@ -2591,14 +3298,31 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
 
                   {/* Final Goods Payable */}
                   {(() => {
-                    const totalGoods = (Number(finalHisabState.prevBalance) || 0) + (summary.grossInventoryAmount || summary.inventoryAmount);
-                    const finalPayable = totalGoods + (Number(finalHisabState.expenses) || 0) - (Number(finalHisabState.withdrawals) || 0) - summary.totalReturnsAmount;
+                    const totalGoods = Math.round(((Number(finalHisabState.prevBalance) || 0) + (summary.grossInventoryAmount || summary.inventoryAmount || 0)) * 100) / 100;
+                    const finalPayable = Math.round((totalGoods + (Number(finalHisabState.expenses) || 0) - (Number(finalHisabState.withdrawals) || 0) - (summary.totalReturnsAmount || 0)) * 100) / 100;
+                    const totalLiquid = Math.round((totalBankBalance + totalMeeshoPending) * 100) / 100;
+                    const companyEntry = Number(finalHisabState.companyPersonalEntry) || 0;
+                    const mainCompanyEntry = Number(finalHisabState.mainCompanyPersonalEntry) || 0;
+                    const netProfit = Math.round(((totalLiquid - finalPayable) + companyEntry + mainCompanyEntry) * 100) / 100;
+
                     return (
-                      <div className={`p-4 rounded-2xl border ${finalPayable >= 0 ? 'bg-emerald-50 border-emerald-300 text-emerald-950' : 'bg-rose-50 border-rose-300 text-rose-950'} shadow-sm`}>
-                        <div className="text-[11px] font-bold uppercase tracking-wider text-gray-500">
-                          {getCompanyTitle()} ને માલના લેવાના થતાં ફાઈનલ રૂ. (જે આગળના હિસાબમાં લેવા)
+                      <div className={`p-4 rounded-2xl border ${finalPayable >= 0 ? 'bg-emerald-50 border-emerald-300 text-emerald-950' : 'bg-rose-50 border-rose-300 text-rose-950'} shadow-sm space-y-2.5`}>
+                        <div className="flex items-center justify-between">
+                          <div className="text-[11px] font-bold uppercase tracking-wider text-gray-600">
+                            {getCompanyTitle()} ને માલના લેવાના થતાં ફાઈનલ રૂ. (જે આગળના હિસાબમાં લેવા)
+                          </div>
+                          <button
+                            type="button"
+                            disabled={savingHisabSnapshot}
+                            onClick={() => handleSaveHisabSnapshot(finalPayable, netProfit)}
+                            className="no-print flex items-center gap-1.5 px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition shadow-xs cursor-pointer"
+                            title="આ ફાઈનલ હિસાબનો સ્નેપશોટ સેવ કરો"
+                          >
+                            {savingHisabSnapshot ? <FaSync className="w-3 h-3 animate-spin" /> : <FaSave className="w-3 h-3" />}
+                            <span>સ્નેપશોટ સેવ કરો</span>
+                          </button>
                         </div>
-                        <div className="text-2xl font-black mt-1 flex items-center justify-between">
+                        <div className="text-2xl font-black flex items-center justify-between">
                           <span>{formatINR(finalPayable)}</span>
                           <span className="text-xs px-2.5 py-1 rounded-full font-bold bg-white/80 shadow-xs">
                             {finalPayable >= 0 ? 'લેવાના નીકળે છે' : 'કંપની તરફથી જમા / ઉપાડ વધુ'}
@@ -2641,6 +3365,7 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
                               <span className="text-gray-400 font-semibold">₹</span>
                               <input
                                 type="number"
+                                step="0.01"
                                 value={finalHisabState.companyBankBalances?.[comp] ?? ''}
                                 onChange={(e) => handleCompanyBankBalanceChange(comp, e.target.value)}
                                 className="w-28 px-2 py-1 border border-gray-300 rounded-lg text-right font-bold text-gray-800 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none bg-white shadow-2xs"
@@ -2660,7 +3385,8 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
                         <span className="text-gray-400 font-semibold">₹</span>
                         <input
                           type="number"
-                          value={finalHisabState.bankBalance}
+                          step="0.01"
+                          value={finalHisabState.bankBalance ?? ''}
                           onChange={(e) => setFinalHisabState(prev => ({ ...prev, bankBalance: e.target.value }))}
                           className="w-28 px-2 py-1 border border-gray-300 rounded-lg text-right font-bold text-gray-800 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none"
                           placeholder="0"
@@ -2691,6 +3417,7 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
                               <span className="text-gray-400 font-semibold">₹</span>
                               <input
                                 type="number"
+                                step="0.01"
                                 value={finalHisabState.companyPendingAmounts?.[comp] ?? ''}
                                 onChange={(e) => handleCompanyPendingAmountChange(comp, e.target.value)}
                                 className="w-28 px-2 py-1 border border-gray-300 rounded-lg text-right font-bold text-gray-800 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none bg-white shadow-2xs"
@@ -2710,7 +3437,8 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
                         <span className="text-gray-400 font-semibold">₹</span>
                         <input
                           type="number"
-                          value={finalHisabState.meeshoPending}
+                          step="0.01"
+                          value={finalHisabState.meeshoPending ?? ''}
                           onChange={(e) => setFinalHisabState(prev => ({ ...prev, meeshoPending: e.target.value }))}
                           className="w-28 px-2 py-1 border border-gray-300 rounded-lg text-right font-bold text-gray-800 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none"
                           placeholder="0"
@@ -2729,12 +3457,12 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
 
                   {/* Final Goods Liability deduction & Personal Entries */}
                   {(() => {
-                    const totalGoods = (Number(finalHisabState.prevBalance) || 0) + (summary.grossInventoryAmount || summary.inventoryAmount);
-                    const finalPayable = totalGoods + (Number(finalHisabState.expenses) || 0) - (Number(finalHisabState.withdrawals) || 0) - summary.totalReturnsAmount;
-                    const totalLiquid = totalBankBalance + totalMeeshoPending;
+                    const totalGoods = Math.round(((Number(finalHisabState.prevBalance) || 0) + (summary.grossInventoryAmount || summary.inventoryAmount || 0)) * 100) / 100;
+                    const finalPayable = Math.round((totalGoods + (Number(finalHisabState.expenses) || 0) - (Number(finalHisabState.withdrawals) || 0) - (summary.totalReturnsAmount || 0)) * 100) / 100;
+                    const totalLiquid = Math.round((totalBankBalance + totalMeeshoPending) * 100) / 100;
                     const companyEntry = Number(finalHisabState.companyPersonalEntry) || 0;
                     const mainCompanyEntry = Number(finalHisabState.mainCompanyPersonalEntry) || 0;
-                    const netProfit = (totalLiquid - finalPayable) + companyEntry + mainCompanyEntry;
+                    const netProfit = Math.round(((totalLiquid - finalPayable) + companyEntry + mainCompanyEntry) * 100) / 100;
 
                     return (
                       <div className="space-y-3.5 pt-3 border-t border-gray-100">
@@ -2753,6 +3481,7 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
                             <span className="text-amber-600 font-semibold">₹</span>
                             <input
                               type="number"
+                              step="0.01"
                               value={finalHisabState.companyPersonalEntry ?? ''}
                               onChange={(e) => setFinalHisabState(prev => ({ ...prev, companyPersonalEntry: e.target.value }))}
                               className="w-28 px-2 py-1 border border-amber-300 rounded-lg text-right font-bold text-gray-900 text-xs focus:ring-1 focus:ring-amber-500 focus:outline-none bg-white shadow-2xs"
@@ -2770,6 +3499,7 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
                             <span className="text-amber-600 font-semibold">₹</span>
                             <input
                               type="number"
+                              step="0.01"
                               value={finalHisabState.mainCompanyPersonalEntry ?? ''}
                               onChange={(e) => setFinalHisabState(prev => ({ ...prev, mainCompanyPersonalEntry: e.target.value }))}
                               className="w-28 px-2 py-1 border border-amber-300 rounded-lg text-right font-bold text-gray-900 text-xs focus:ring-1 focus:ring-amber-500 focus:outline-none bg-white shadow-2xs"
@@ -2809,15 +3539,41 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
             </div>
 
             {/* Modal Footer Actions */}
-            <div className="p-4 sm:p-5 border-t border-gray-200 bg-white flex flex-wrap items-center justify-between gap-3 rounded-b-3xl">
+            <div className="p-4 sm:p-5 border-t border-gray-200 bg-white flex flex-wrap items-center justify-between gap-3 rounded-b-3xl no-print">
               <div className="text-xs text-gray-500 font-medium">
                 આ સેટલમેન્ટ એક્સેલ ફાઈલની <span className="font-bold text-gray-800">`ફાઈનલ હિસાબ`</span> શીટ સાથે ૧૦૦% મેળ ખાય છે.
               </div>
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={handleExportExcel}
+                  disabled={savingHisabSnapshot}
+                  onClick={() => {
+                    const totalGoods = Math.round(((Number(finalHisabState.prevBalance) || 0) + (summary.grossInventoryAmount || summary.inventoryAmount || 0)) * 100) / 100;
+                    const calculatedFinalPayable = Math.round((totalGoods + (Number(finalHisabState.expenses) || 0) - (Number(finalHisabState.withdrawals) || 0) - (summary.totalReturnsAmount || 0)) * 100) / 100;
+                    const totalLiquid = Math.round((totalBankBalance + totalMeeshoPending) * 100) / 100;
+                    const companyEntry = Number(finalHisabState.companyPersonalEntry) || 0;
+                    const mainCompanyEntry = Number(finalHisabState.mainCompanyPersonalEntry) || 0;
+                    const calculatedNetProfit = Math.round(((totalLiquid - calculatedFinalPayable) + companyEntry + mainCompanyEntry) * 100) / 100;
+                    handleSaveHisabSnapshot(calculatedFinalPayable, calculatedNetProfit);
+                  }}
                   className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl shadow-xs transition cursor-pointer"
+                  title="સેવ સ્નેપશોટ"
+                >
+                  {savingHisabSnapshot ? <FaSync className="w-3.5 h-3.5 animate-spin" /> : <FaSave className="w-3.5 h-3.5" />}
+                  <span>Save Snapshot</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handlePrintFinalHisab}
+                  className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-xs transition cursor-pointer"
+                >
+                  <FaPrint className="w-3.5 h-3.5" />
+                  <span>Print ફાઈનલ હિસાબ</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleExportExcel}
+                  className="flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl shadow-xs transition cursor-pointer"
                 >
                   <FaFileExcel className="w-3.5 h-3.5" />
                   <span>Export ફાઈનલ હિસાબ Excel</span>
@@ -2835,6 +3591,731 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
           </div>
         </div>
       )}
+
+      {/* ========================================================================= */}
+      {/* FINAL HISAB SNAPSHOTS HISTORY & ARCHIVE MODAL (SINGLE & MULTI COMPANY)      */}
+      {/* ========================================================================= */}
+      {showHisabHistoryModal && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-3 sm:p-5 bg-black/60 backdrop-blur-xs animate-in fade-in">
+          <div className="bg-white rounded-3xl shadow-2xl border border-gray-200 w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden">
+            {/* Header */}
+            <div className="p-4 sm:p-5 border-b border-gray-100 flex flex-col gap-3 bg-gradient-to-r from-slate-900 via-indigo-950 to-blue-950 text-white rounded-t-3xl">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-300 border border-amber-500/30 flex items-center justify-center">
+                    <FaHistory className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-base sm:text-lg font-black text-white flex items-center gap-2">
+                      <span>સેવ થયેલ ફાઈનલ હિસાબ સ્નેપશોટ હિસ્ટ્રી & આર્કાઇવ</span>
+                    </h3>
+                    <p className="text-xs text-gray-300">
+                      {hisabHistoryTab === 'current' ? (
+                        <span>સ્કોપ: <strong className="text-amber-300">{getCompanyTitle()}</strong> ({isMultiCompany ? 'મલ્ટી-કંપની ગ્રૂપ' : 'સિંગલ કંપની'})</span>
+                      ) : (
+                        <span className="text-emerald-300">તમામ અધિકૃત કંપનીઓનો સેવ હિસાબ રેકોર્ડ (All Company Archive)</span>
+                      )}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowHisabHistoryModal(false)}
+                  className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition cursor-pointer"
+                >
+                  <FaTimes className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Tabs Switcher and Search Bar */}
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 pt-1">
+                {/* Tabs */}
+                <div className="flex items-center bg-black/30 p-1 rounded-xl border border-white/10 self-start">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setHisabHistoryTab('current');
+                      fetchHisabSnapshotsList('current');
+                    }}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1.5 ${
+                      hisabHistoryTab === 'current'
+                        ? 'bg-white text-indigo-950 shadow-xs'
+                        : 'text-gray-300 hover:text-white hover:bg-white/10'
+                    }`}
+                  >
+                    <span>વર્તમાન સિલેક્શન હિસ્ટ્રી</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setHisabHistoryTab('all');
+                      fetchHisabSnapshotsList('all');
+                    }}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1.5 ${
+                      hisabHistoryTab === 'all'
+                        ? 'bg-white text-indigo-950 shadow-xs'
+                        : 'text-gray-300 hover:text-white hover:bg-white/10'
+                    }`}
+                  >
+                    <span>📜 તમામ હિસાબ આર્કાઇવ</span>
+                  </button>
+                </div>
+
+                {/* Search */}
+                <div className="relative flex-1 max-w-xs">
+                  <FaSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-3 h-3" />
+                  <input
+                    type="text"
+                    value={hisabHistorySearch}
+                    onChange={(e) => setHisabHistorySearch(e.target.value)}
+                    placeholder="કંપની નામ, તારીખ કે યુઝર..."
+                    className="w-full pl-8 pr-7 py-1.5 bg-white/10 border border-white/20 rounded-xl text-xs text-white placeholder-gray-400 focus:outline-none focus:bg-white/20 focus:border-white/40"
+                  />
+                  {hisabHistorySearch && (
+                    <button
+                      type="button"
+                      onClick={() => setHisabHistorySearch('')}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-white"
+                    >
+                      <FaTimes className="w-3 h-3" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* List */}
+            <div className="p-4 sm:p-5 flex-1 overflow-y-auto space-y-3.5 bg-gray-50/50">
+              {loadingHisabList ? (
+                <div className="py-16 text-center text-gray-400 text-xs flex flex-col items-center gap-2">
+                  <FaSync className="w-6 h-6 animate-spin text-blue-600" />
+                  <span className="font-semibold text-gray-600">સ્નેપશોટ લોડ થઈ રહ્યા છે...</span>
+                </div>
+              ) : (
+                <>
+                  {/* Related Subsets Notice on 'current' tab */}
+                  {hisabHistoryTab === 'current' && relatedHisabSnapshots.length > 0 && (
+                    <div className="p-3.5 bg-amber-50 rounded-2xl border border-amber-300 shadow-2xs space-y-2">
+                      <div className="flex items-center gap-2 text-amber-900 font-bold text-xs">
+                        <FaExclamationTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                        <span>સંબંધિત કંપનીઓ / જૂથનો અગાઉનો સેવ હિસાબ (Inheritable Group History)</span>
+                      </div>
+                      <p className="text-[11px] text-amber-800 leading-relaxed">
+                        વર્તમાન સિલેક્શનમાં નવી કંપની ઉમેરાઈ હોય અને તેનો અગાઉ કોઈ હિસાબ ન હોય, તો તમે જૂની કંપનીઓનો છેલ્લો સેવ હિસાબ કન્ફર્મેશન સાથે &apos;જૂની બાકી&apos; તરીકે લઈ શકો છો:
+                      </p>
+                      <div className="space-y-2 pt-1">
+                        {relatedHisabSnapshots.map(relSnap => (
+                          <div
+                            key={relSnap._id}
+                            className="bg-white p-3 rounded-xl border border-amber-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2 shadow-2xs"
+                          >
+                            <div>
+                              <div className="text-xs font-black text-gray-900">
+                                {relSnap.companyTitle || (relSnap.selectedCompanies || []).join(' & ')}
+                              </div>
+                              <div className="text-[10px] text-gray-500">
+                                સમયગાળો: {moment(relSnap.startDate).format('DD.MM.YY')} થી {moment(relSnap.endDate).format('DD.MM.YY')} | સેવ: {moment(relSnap.createdAt).format('DD.MM.YY')}
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2 justify-end">
+                              <span className="text-xs font-black font-mono text-emerald-700">
+                                {formatINR(relSnap.finalPayable)}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => setPreviewSnapshotModal({ isOpen: true, snapshot: relSnap })}
+                                className="px-2 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-[11px] font-bold transition cursor-pointer flex items-center gap-1"
+                                title="Print view"
+                              >
+                                <FaPrint className="w-3 h-3 text-blue-600" />
+                                <span>Print</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleExportSnapshotExcel(relSnap)}
+                                className="px-2 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-[11px] font-bold transition cursor-pointer flex items-center gap-1"
+                                title="Excel export"
+                              >
+                                <FaFileExcel className="w-3 h-3 text-emerald-600" />
+                                <span>Excel</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setConfirmInheritModal({
+                                  isOpen: true,
+                                  snapshot: relSnap,
+                                  extraCompanies: extraCompaniesWithoutHistory
+                                })}
+                                className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-[11px] font-bold transition cursor-pointer shadow-2xs"
+                              >
+                                આ રકમ જૂની બાકી તરીકે લો
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Main Snapshots list */}
+                  {displayedSnapshots.length === 0 ? (
+                    <div className="py-14 text-center text-gray-400 text-xs">
+                      <p className="font-semibold text-gray-600 text-sm">કોઈ સ્નેપશોટ મળ્યો નથી</p>
+                      <p className="text-gray-400 mt-1">
+                        {hisabHistorySearch
+                          ? 'તમારી શોધ મુજબ કોઈ હિસાબ મળ્યો નથી. સર્ચ શબ્દ બદલીને જુઓ.'
+                          : hisabHistoryTab === 'current' && (!selectedCompanies || selectedCompanies.length === 0)
+                            ? 'કૃપા કરીને હિસાબ હિસ્ટ્રી જોવા માટે કોઈ ચોક્કસ કંપની સિલેક્ટ કરો, અથવા "📜 તમામ હિસાબ આર્કાઇવ" ટેબ પસંદ કરો.'
+                            : 'ફાઈનલ હિસાબ મોડલમાં "Save Snapshot" બટન પર ક્લિક કરવાથી અહીં રેકોર્ડ સેવ રહેશે.'}
+                      </p>
+                    </div>
+                  ) : (
+                    displayedSnapshots.map((snap, idx) => (
+                      <div
+                        key={snap._id}
+                        className="bg-white p-4 rounded-2xl border border-gray-200 shadow-2xs hover:border-blue-300 transition space-y-3"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="text-xs font-black text-gray-900">
+                                #{displayedSnapshots.length - idx} {snap.companyTitle || 'કંપની'}
+                              </span>
+                              <span className="text-[10px] bg-blue-50 text-blue-700 font-bold px-2 py-0.5 rounded-full border border-blue-200">
+                                {moment(snap.startDate).format('DD.MM.YYYY')} થી {moment(snap.endDate).format('DD.MM.YYYY')}
+                              </span>
+                              {idx === 0 && hisabHistoryTab === 'current' && (
+                                <span className="text-[10px] bg-emerald-100 text-emerald-800 font-black px-2 py-0.5 rounded-full">
+                                  છેલ્લો સેટ હિસાબ
+                                </span>
+                              )}
+                              {snap.isMultiCompany && (
+                                <span className="text-[10px] bg-purple-50 text-purple-700 font-bold px-2 py-0.5 rounded-full border border-purple-200">
+                                  મલ્ટી-કંપની ({snap.selectedCompanies?.length || 0})
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-[11px] text-gray-500 mt-1">
+                              સેવ તારીખ: {moment(snap.createdAt).format('DD/MM/YYYY, hh:mm A')} {snap.savedByName ? `(By: ${snap.savedByName})` : ''}
+                            </div>
+                          </div>
+
+                          <div className="text-right">
+                            <div className="text-[10px] text-gray-500 font-semibold uppercase">માલના લેવાના ફાઈનલ રૂ.</div>
+                            <div className="text-lg font-black font-mono text-emerald-700">
+                              {formatINR(snap.finalPayable)}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t border-gray-100 text-[11px]">
+                          <div>
+                            <span className="text-gray-400">જૂની બાકી:</span>
+                            <div className="font-bold text-gray-700">{formatINR(snap.prevBalance)}</div>
+                          </div>
+                          <div>
+                            <span className="text-gray-400">નવો માલ:</span>
+                            <div className="font-bold text-gray-700">{formatINR(snap.grossInventoryAmount)}</div>
+                          </div>
+                          <div>
+                            <span className="text-gray-400">કુલ રીટર્ન:</span>
+                            <div className="font-bold text-rose-600">-{formatINR(snap.totalReturnsAmount)}</div>
+                          </div>
+                          <div>
+                            <span className="text-gray-400">ચોખ્ખો નફો:</span>
+                            <div className="font-bold text-indigo-700">{formatINR(snap.netProfit)}</div>
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap items-center justify-end gap-2 pt-2 border-t border-gray-100">
+                          <button
+                            type="button"
+                            onClick={() => setPreviewSnapshotModal({ isOpen: true, snapshot: snap })}
+                            className="flex items-center gap-1 px-3 py-1 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-lg text-xs font-bold transition cursor-pointer"
+                            title="આ હિસાબને જુઓ અને Print કરો"
+                          >
+                            <FaPrint className="w-3 h-3 text-blue-600" />
+                            <span>Print હિસાબ</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleExportSnapshotExcel(snap)}
+                            className="flex items-center gap-1 px-3 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded-lg text-xs font-bold transition cursor-pointer"
+                            title="આ હિસાબને Excel માં ડાઉનલોડ કરો"
+                          >
+                            <FaFileExcel className="w-3 h-3 text-emerald-600" />
+                            <span>Export Excel</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const r = Number(snap.finalPayable) || 0;
+                              const roundedVal = Math.round(r * 100) / 100;
+                              if (snap.scopeKey && snap.scopeKey !== currentScopeKey) {
+                                // Subset or different scope -> ask confirmation
+                                setConfirmInheritModal({
+                                  isOpen: true,
+                                  snapshot: snap,
+                                  extraCompanies: extraCompaniesWithoutHistory
+                                });
+                              } else {
+                                setFinalHisabState(prev => ({
+                                  ...prev,
+                                  prevBalance: roundedVal
+                                }));
+                                setShowHisabHistoryModal(false);
+                                toast.success(`આ સ્નેપશોટની રકમ (${formatINR(roundedVal)}) આગળના હિસાબની જૂની બાકીમાં સેટ થઈ ગઈ!`);
+                              }
+                            }}
+                            className="px-3 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 rounded-lg text-xs font-bold transition cursor-pointer"
+                          >
+                            આ રકમ નવી જૂની બાકી તરીકે લો
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteSnapshot(snap)}
+                            className="px-2 py-1 text-rose-600 hover:bg-rose-50 rounded-lg text-xs font-bold transition cursor-pointer"
+                            title="Delete snapshot"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="p-3.5 border-t border-gray-200 bg-white flex items-center justify-between">
+              <div className="text-xs text-gray-500">
+                કુલ દર્શાવેલ રેકોર્ડ: <strong className="text-gray-900">{displayedSnapshots.length}</strong>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowHisabHistoryModal(false)}
+                className="px-4 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-bold rounded-xl transition cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* CONFIRM INHERITING PREVIOUS HISAB BALANCE MODAL                            */}
+      {/* ========================================================================= */}
+      {confirmInheritModal.isOpen && confirmInheritModal.snapshot && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center p-3 sm:p-5 bg-black/60 backdrop-blur-xs animate-in fade-in">
+          <div className="bg-white rounded-3xl shadow-2xl border border-amber-300 w-full max-w-lg overflow-hidden flex flex-col">
+            {/* Header */}
+            <div className="p-4 sm:p-5 border-b border-amber-200 bg-gradient-to-r from-amber-600 via-orange-600 to-amber-700 text-white flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-white/20 text-white flex items-center justify-center shrink-0">
+                <FaExclamationTriangle className="w-5 h-5 text-amber-200" />
+              </div>
+              <div>
+                <h3 className="text-base font-black">અગાઉના હિસાબની રકમ લેવા અંગે કન્ફર્મેશન</h3>
+                <p className="text-xs text-amber-100">જૂની કંપનીઓનો છેલ્લો હિસાબ વર્તમાન જૂથમાં લેવો</p>
+              </div>
+            </div>
+
+            {/* Body */}
+            <div className="p-5 space-y-4 text-xs text-gray-700 bg-amber-50/30">
+              <p className="leading-relaxed text-gray-800">
+                વર્તમાન બિલિંગ ગ્રૂપમાં નવી કંપનીઓ શામેલ છે જેનો અગાઉ કોઈ અલગ હિસાબ સેવ થયેલ નથી. તમે અગાઉની કંપનીઓનો છેલ્લો હિસાબ પસંદ કરી રહ્યા છો:
+              </p>
+
+              <div className="bg-white p-3.5 rounded-2xl border border-amber-200 space-y-2.5 shadow-2xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-500 font-medium">અગાઉનો સેવ હિસાબ:</span>
+                  <span className="font-bold text-gray-900">{confirmInheritModal.snapshot.companyTitle}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-500 font-medium">સમયગાળો:</span>
+                  <span className="font-bold text-gray-800">
+                    {moment(confirmInheritModal.snapshot.startDate).format('DD/MM/YYYY')} થી {moment(confirmInheritModal.snapshot.endDate).format('DD/MM/YYYY')}
+                  </span>
+                </div>
+                {confirmInheritModal.extraCompanies && confirmInheritModal.extraCompanies.length > 0 && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-gray-500 font-medium">નવી જોડાયેલ કંપનીઓ:</span>
+                    <span className="font-bold text-amber-700">{confirmInheritModal.extraCompanies.join(', ')}</span>
+                  </div>
+                )}
+                <div className="pt-2 border-t border-gray-100 flex items-center justify-between">
+                  <span className="text-gray-600 font-semibold">અગાઉનો ફાઈનલ હિસાબ (Final Payable):</span>
+                  <span className="text-lg font-black font-mono text-emerald-700">
+                    {formatINR(confirmInheritModal.snapshot.finalPayable)}
+                  </span>
+                </div>
+              </div>
+
+              <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl text-blue-900 leading-relaxed">
+                👉 શું તમે આ રકમ (<strong>{formatINR(confirmInheritModal.snapshot.finalPayable)}</strong>) ને વર્તમાન બિલિંગ માટે <strong>&apos;આગળના હિસાબના લેવાના થતાં રૂ. (જૂની બાકી)&apos;</strong> તરીકે સેટ કરવા માંગો છો?
+              </div>
+            </div>
+
+            {/* Actions */}
+            <div className="p-4 border-t border-gray-200 bg-white flex items-center justify-end gap-2.5">
+              <button
+                type="button"
+                onClick={() => setConfirmInheritModal({ isOpen: false, snapshot: null, extraCompanies: [] })}
+                className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-bold rounded-xl transition cursor-pointer"
+              >
+                રદ કરો (Cancel)
+              </button>
+              <button
+                type="button"
+                onClick={() => handleConfirmInheritSnapshot(confirmInheritModal.snapshot)}
+                className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-xl shadow-xs transition cursor-pointer flex items-center gap-1.5"
+              >
+                <FaCheckCircle className="w-3.5 h-3.5" />
+                <span>હા, આ રકમ જૂની બાકી તરીકે સેટ કરો</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* PROJECT ALERT DIALOG FOR SNAPSHOT DELETION (NO BROWSER ALERT)             */}
+      {/* ========================================================================= */}
+      {deleteConfirmModal.isOpen && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in">
+          <div className="bg-white rounded-3xl shadow-2xl border border-rose-200 w-full max-w-md overflow-hidden flex flex-col">
+            {/* Header */}
+            <div className="p-4 sm:p-5 border-b border-rose-100 bg-gradient-to-r from-rose-600 via-rose-700 to-red-800 text-white flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-white/20 text-white flex items-center justify-center shrink-0">
+                <FaTrashAlt className="w-5 h-5 text-rose-100" />
+              </div>
+              <div>
+                <h3 className="text-base font-black">સ્નેપશોટ ડિલીટ કરવાની પુષ્ટિ</h3>
+                <p className="text-xs text-rose-100">આ સેવ રેકોર્ડ હંમેશા માટે ડિલીટ થઈ જશે</p>
+              </div>
+            </div>
+
+            {/* Body */}
+            <div className="p-5 space-y-3.5 text-xs text-gray-700 bg-rose-50/20">
+              <p className="text-gray-800 leading-relaxed">
+                શું તમે ખરેખર નીચે દર્શાવેલ સેવ થયેલ ફાઈનલ હિસાબ સ્નેપશોટ ડિલીટ કરવા માંગો છો?
+              </p>
+
+              <div className="p-3.5 bg-white rounded-2xl border border-rose-200 space-y-1.5 shadow-2xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-500 font-medium">કંપની:</span>
+                  <span className="font-bold text-gray-900">{deleteConfirmModal.companyTitle}</span>
+                </div>
+                {deleteConfirmModal.dateRange && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-gray-500 font-medium">સમયગાળો:</span>
+                    <span className="font-bold text-gray-800">{deleteConfirmModal.dateRange}</span>
+                  </div>
+                )}
+              </div>
+
+              <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-xl text-amber-900 flex items-center gap-2">
+                <FaExclamationTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                <span>ધ્યાન આપો: આ ક્રિયા પૂર્વવત્ (Undo) થઈ શકશે નહીં.</span>
+              </div>
+            </div>
+
+            {/* Actions */}
+            <div className="p-4 border-t border-gray-100 bg-white flex items-center justify-end gap-2.5">
+              <button
+                type="button"
+                onClick={() => setDeleteConfirmModal({ isOpen: false, snapshotId: null, companyTitle: '', dateRange: '' })}
+                className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-bold rounded-xl transition cursor-pointer"
+              >
+                રદ કરો (Cancel)
+              </button>
+              <button
+                type="button"
+                onClick={handleDeleteSnapshotConfirmed}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-xl shadow-xs transition cursor-pointer flex items-center gap-1.5"
+              >
+                <FaTrashAlt className="w-3.5 h-3.5" />
+                <span>હા, ડિલીટ કરો</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* HISTORICAL SNAPSHOT PREVIEW & PRINT MODAL                                  */}
+      {/* ========================================================================= */}
+      {previewSnapshotModal.isOpen && previewSnapshotModal.snapshot && (() => {
+        const snap = previewSnapshotModal.snapshot;
+        const compTitle = snap.companyTitle || (snap.selectedCompanies || []).join(' & ') || 'કંપની';
+        const snapMulti = snap.isMultiCompany && (snap.selectedCompanies || []).length > 1;
+        const totalGoods = Math.round(((snap.prevBalance || 0) + (snap.grossInventoryAmount || snap.inventoryAmount || 0)) * 100) / 100;
+        const totalLiquid = Math.round(((snap.bankBalance || 0) + (snap.meeshoPending || 0)) * 100) / 100;
+
+        return (
+          <div className="final-hisab-print-overlay fixed inset-0 z-[70] flex items-center justify-center p-3 sm:p-5 bg-black/60 backdrop-blur-xs animate-in fade-in">
+            <div className="final-hisab-print-card bg-white rounded-3xl shadow-2xl border border-gray-200 w-full max-w-5xl max-h-[92vh] overflow-y-auto flex flex-col">
+              {/* Header */}
+              <div className="p-5 sm:p-6 border-b border-gray-100 flex items-center justify-between bg-gradient-to-r from-blue-900 via-indigo-900 to-slate-900 text-white rounded-t-3xl print:rounded-none print:py-3 print:px-4">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="px-2.5 py-0.5 rounded-full bg-blue-500/30 text-blue-200 text-xs font-bold border border-blue-400/30">
+                      સેવ થયેલ ફાઈનલ હિસાબ
+                    </span>
+                    <span className="text-xs text-gray-300">
+                      તા. {moment(snap.startDate).format('DD.MM.YYYY')} થી {moment(snap.endDate).format('DD.MM.YYYY')}
+                    </span>
+                  </div>
+                  <h2 className="text-xl sm:text-2xl font-black tracking-tight mt-1">
+                    {compTitle} નો ફાઈનલ હિસાબ
+                  </h2>
+                </div>
+                <div className="flex items-center gap-2 no-print">
+                  <button
+                    type="button"
+                    onClick={() => window.print()}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold transition cursor-pointer shadow-xs"
+                    title="Print આ હિસાબ"
+                  >
+                    <FaPrint className="w-3.5 h-3.5" />
+                    <span>Print</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleExportSnapshotExcel(snap)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition cursor-pointer shadow-xs"
+                    title="Export to Excel"
+                  >
+                    <FaFileExcel className="w-3.5 h-3.5" />
+                    <span>Export Excel</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPreviewSnapshotModal({ isOpen: false, snapshot: null })}
+                    className="w-9 h-9 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition cursor-pointer"
+                  >
+                    <FaTimes className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Sheet Body */}
+              <div className="final-hisab-print-sheet p-5 sm:p-6 space-y-6 flex-1 bg-gray-50/50 print:bg-white print:p-2 print:space-y-4">
+                {/* Print Only Header Meta */}
+                <div className="hidden print:flex items-center justify-between text-[11px] text-gray-600 pb-2 border-b border-gray-300 font-medium">
+                  <span>કંપની: <strong className="text-black">{compTitle}</strong></span>
+                  <span>સમયગાળો: <strong>{moment(snap.startDate).format('DD/MM/YYYY')} થી {moment(snap.endDate).format('DD/MM/YYYY')}</strong></span>
+                  <span>સેવ તારીખ: <strong>{moment(snap.createdAt).format('DD/MM/YYYY, hh:mm A')}</strong> {snap.savedByName ? `(${snap.savedByName})` : ''}</span>
+                </div>
+
+                <div className="final-hisab-print-grid grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  {/* LEFT COLUMN: GOODS SETTLEMENT */}
+                  <div className="bg-white rounded-2xl border border-gray-200 shadow-xs p-5 space-y-4">
+                    <div className="border-b border-gray-100 pb-2.5 flex items-center justify-between">
+                      <h3 className="font-black text-gray-900 text-sm flex items-center gap-2">
+                        <span className="w-2.5 h-2.5 rounded-full bg-blue-600"></span>
+                        <span>{compTitle} એ લીધેલ માલની એન્ટ્રી (માલનો હિસાબ)</span>
+                      </h3>
+                      <span className="text-[11px] text-gray-400 font-semibold">{compTitle}</span>
+                    </div>
+
+                    {/* 1. Previous Balance */}
+                    <div className="flex items-center justify-between text-xs bg-gray-50/70 p-2.5 rounded-xl border border-gray-200">
+                      <span className="text-gray-800 font-bold">આગળના હિસાબના લેવાના થતાં રૂ. (જૂની બાકી):</span>
+                      <span className="font-black font-mono text-gray-900 text-sm">{formatINR(snap.prevBalance)}</span>
+                    </div>
+
+                    {/* 2. Dispatched Goods */}
+                    <div className="flex items-center justify-between gap-3 text-xs">
+                      <div>
+                        <div className="text-gray-700 font-medium">આ વખતના માલના લેવાના થતાં રૂ.:</div>
+                        <div className="text-[11px] text-gray-400">
+                          માલ: {formatINR(snap.inventoryAmount)} + પ્રિન્ટ: {formatINR(snap.printCharge)}
+                        </div>
+                      </div>
+                      <div className="font-bold text-gray-900 text-sm">
+                        {formatINR(snap.grossInventoryAmount || snap.inventoryAmount)}
+                      </div>
+                    </div>
+
+                    {/* Subtotal Goods */}
+                    <div className="p-2.5 rounded-xl bg-blue-50/70 border border-blue-200/60 flex items-center justify-between text-xs font-bold text-blue-900">
+                      <span>ટોટલ માલના લેવાના થતાં રૂ.:</span>
+                      <span className="text-sm font-black">{formatINR(totalGoods)}</span>
+                    </div>
+
+                    {/* Return Breakdowns */}
+                    <div className="space-y-2 pt-2 border-t border-gray-100 text-xs">
+                      <div className="font-bold text-gray-700 uppercase tracking-wider text-[11px]">
+                        રિટર્ન ની એન્ટ્રી (Deductions):
+                      </div>
+                      <div className="flex items-center justify-between text-amber-800 pl-2">
+                        <span>• કુરિયર રીટર્ન (RTO) ના રૂ.:</span>
+                        <span className="font-bold">{formatINR(snap.returnsAmount)}</span>
+                      </div>
+                      <div className="flex items-center justify-between text-purple-800 pl-2">
+                        <span>• કસ્ટમર રીટર્ન ના રૂ.:</span>
+                        <span className="font-bold">{formatINR(snap.customerReturnsAmount)}</span>
+                      </div>
+                      <div className="flex items-center justify-between text-rose-800 pl-2">
+                        <span>• કેન્સલ ઓર્ડર ના રૂ.:</span>
+                        <span className="font-bold">{formatINR(snap.cancelledAmount)}</span>
+                      </div>
+                      <div className="p-2 rounded-lg bg-rose-50 border border-rose-200 flex items-center justify-between text-xs font-bold text-rose-900">
+                        <span>ટોટલ રીટર્ન રૂ.:</span>
+                        <span className="font-black">-{formatINR(snap.totalReturnsAmount)}</span>
+                      </div>
+                    </div>
+
+                    {/* Expenses & Withdrawals */}
+                    <div className="space-y-2 pt-2 border-t border-gray-100 text-xs">
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-700 font-medium">+ કંપની માટે લાગતો ખર્ચ (Expenses):</span>
+                        <span className="font-bold text-gray-900">{formatINR(snap.expenses)}</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-700 font-medium">- {compTitle} એ ઉપાડેલા રૂ. (Upad):</span>
+                        <span className="font-bold text-gray-900">{formatINR(snap.withdrawals)}</span>
+                      </div>
+                    </div>
+
+                    {/* Final Goods Payable */}
+                    <div className={`p-4 rounded-2xl border ${snap.finalPayable >= 0 ? 'bg-emerald-50 border-emerald-300 text-emerald-950' : 'bg-rose-50 border-rose-300 text-rose-950'} shadow-sm space-y-2`}>
+                      <div className="text-[11px] font-bold uppercase tracking-wider text-gray-600">
+                        {compTitle} ને માલના લેવાના થતાં ફાઈનલ રૂ. (જે આગળના હિસાબમાં લેવા)
+                      </div>
+                      <div className="text-2xl font-black flex items-center justify-between">
+                        <span>{formatINR(snap.finalPayable)}</span>
+                        <span className="text-xs px-2.5 py-1 rounded-full font-bold bg-white/80 shadow-xs">
+                          {snap.finalPayable >= 0 ? 'લેવાના નીકળે છે' : 'કંપની તરફથી જમા'}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* RIGHT COLUMN: PROFITABILITY ANALYSIS */}
+                  <div className="bg-white rounded-2xl border border-gray-200 shadow-xs p-5 space-y-4">
+                    <div className="border-b border-gray-100 pb-2.5 flex items-center justify-between">
+                      <h3 className="font-black text-gray-900 text-sm flex items-center gap-2">
+                        <span className="w-2.5 h-2.5 rounded-full bg-emerald-600"></span>
+                        <span>{compTitle} ના હિસાબનું સરવૈયું (ફક્ત નફો જોવા માટે)</span>
+                      </h3>
+                      <span className="text-[11px] text-gray-400 font-semibold">{compTitle}</span>
+                    </div>
+
+                    {/* 1. Bank Balance */}
+                    <div className="space-y-1.5 text-xs">
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-700 font-medium">{compTitle} ના બધા બેન્ક ખાતામાં પડેલી રકમ:</span>
+                        <span className="font-black text-gray-900">{formatINR(snap.bankBalance)}</span>
+                      </div>
+                      {snapMulti && snap.companyBankBalances && Object.keys(snap.companyBankBalances).length > 0 && (
+                        <div className="pl-3 space-y-1 text-[11px] text-gray-500 border-l-2 border-blue-200">
+                          {Object.entries(snap.companyBankBalances).map(([c, amt]) => (
+                            <div key={c} className="flex items-center justify-between">
+                              <span>• {c}:</span>
+                              <span className="font-mono font-semibold">{formatINR(amt)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* 2. Meesho / Marketplace Pending */}
+                    <div className="space-y-1.5 text-xs pt-2 border-t border-gray-100">
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-700 font-medium">{compTitle} મીશો / માર્કેટપ્લેસ માંથી લેવાના નીકળતા રૂ.:</span>
+                        <span className="font-black text-gray-900">{formatINR(snap.meeshoPending)}</span>
+                      </div>
+                      {snapMulti && snap.companyPendingAmounts && Object.keys(snap.companyPendingAmounts).length > 0 && (
+                        <div className="pl-3 space-y-1 text-[11px] text-gray-500 border-l-2 border-amber-200">
+                          {Object.entries(snap.companyPendingAmounts).map(([c, amt]) => (
+                            <div key={c} className="flex items-center justify-between">
+                              <span>• {c}:</span>
+                              <span className="font-mono font-semibold">{formatINR(amt)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Total Liquid */}
+                    <div className="p-2.5 rounded-xl bg-emerald-50/70 border border-emerald-200/60 flex items-center justify-between text-xs font-bold text-emerald-900">
+                      <span>લેવાનું નીકળતું ટોટલ પેમેન્ટ રૂ. (Liquid Funds):</span>
+                      <span className="text-sm font-black">{formatINR(totalLiquid)}</span>
+                    </div>
+
+                    {/* Liabilities & Personal Entries */}
+                    <div className="space-y-3 pt-2 border-t border-gray-100 text-xs">
+                      <div className="flex items-center justify-between bg-gray-50/80 p-2.5 rounded-xl border border-gray-200">
+                        <span className="text-gray-700 font-semibold">માલના ફાઈનલ લેવાના થતાં રૂ. (Liability):</span>
+                        <span className="font-bold text-gray-900">{formatINR(snap.finalPayable)}</span>
+                      </div>
+                      <div className="flex items-center justify-between bg-amber-50/40 p-2.5 rounded-xl border border-amber-200/60">
+                        <span className="text-gray-800 font-medium">સબ કંપની ({compTitle}) એ ઉપાડેલી પર્સનલ એન્ટ્રી:</span>
+                        <span className="font-bold text-gray-900">{formatINR(snap.companyPersonalEntry)}</span>
+                      </div>
+                      <div className="flex items-center justify-between bg-amber-50/40 p-2.5 rounded-xl border border-amber-200/60">
+                        <span className="text-gray-800 font-medium">મેઈન કંપની એ ઉપાડેલી પર્સનલ એન્ટ્રી:</span>
+                        <span className="font-bold text-gray-900">{formatINR(snap.mainCompanyPersonalEntry)}</span>
+                      </div>
+                    </div>
+
+                    {/* Net Company Profit */}
+                    <div className="p-5 rounded-2xl bg-gradient-to-br from-indigo-600 via-blue-600 to-teal-700 text-white shadow-lg space-y-2">
+                      <div className="flex items-center justify-between text-xs text-blue-100 font-bold uppercase tracking-wider">
+                        <span>ટોટલ કંપનીનો વધતો ચોખ્ખો નફો (Net Company Profit)</span>
+                        <span className="px-2 py-0.5 rounded-full bg-white/20 text-[10px] font-bold">
+                          Liquid - Liability + Personal
+                        </span>
+                      </div>
+                      <div className="text-3xl font-black tracking-tight font-mono">
+                        {formatINR(snap.netProfit)}
+                      </div>
+                      <div className="text-xs text-blue-100/90 pt-1">
+                        સેવ કરનાર: {snap.savedByName || 'User'} | સેવ તારીખ: {moment(snap.createdAt).format('DD/MM/YYYY, hh:mm A')}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Modal Footer */}
+              <div className="p-4 sm:p-5 border-t border-gray-200 bg-white flex items-center justify-between rounded-b-3xl no-print">
+                <div className="text-xs text-gray-500 font-medium">
+                  સેવ રેકોર્ડ ID: <span className="font-mono text-gray-700">{snap._id}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => window.print()}
+                    className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-xs transition cursor-pointer"
+                  >
+                    <FaPrint className="w-3.5 h-3.5" />
+                    <span>Print</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleExportSnapshotExcel(snap)}
+                    className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl shadow-xs transition cursor-pointer"
+                  >
+                    <FaFileExcel className="w-3.5 h-3.5" />
+                    <span>Export Excel</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPreviewSnapshotModal({ isOpen: false, snapshot: null })}
+                    className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-bold rounded-xl transition cursor-pointer"
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ========================================================================= */}
       {/* QUICK SKU & RATE CONFIGURATION MODAL (રીઅલ-ટાઇમ રેટ અને મેપિંગ)              */}
