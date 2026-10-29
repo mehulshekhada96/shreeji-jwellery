@@ -68,18 +68,36 @@ async function handler(req, res) {
         .lean();
 
       // Count linked MasterRate origins for each Dabbi
+      // Match by explicit dabbi link, dabbiName (case-insensitive), OR matching rates
       const dabbiCounts = await Promise.all(
         dabbis.map(async (d) => {
-          const count = await MasterRate.countDocuments({
-            company: companyId,
-            $or: [
-              { dabbi: d._id },
-              { dabbiName: d.name }
-            ]
-          });
+          const dabbiNameRegex = d.name ? new RegExp(`^${escapeRegex(d.name)}$`, 'i') : null;
+          const matchConditions = [
+            { dabbi: d._id }
+          ];
+          if (dabbiNameRegex) {
+            matchConditions.push({ dabbiName: dabbiNameRegex });
+          }
+          // Also match origins that have the exact same boxRate + boxReturnRate
+          // (these are auto-matched in the frontend DabbiSelect but not explicitly saved)
+          if (d.boxRate != null && Number(d.boxRate) > 0) {
+            matchConditions.push({
+              boxRate: Number(d.boxRate),
+              boxReturnRate: Number(d.boxReturnRate) || 0,
+              dabbi: null,
+              dabbiName: { $in: [null, ''] }
+            });
+          }
+
+          const linkedOrigins = await MasterRate.find(
+            { company: companyId, $or: matchConditions },
+            'origin _id'
+          ).lean();
+
           return {
             ...d,
-            linkedOriginsCount: count
+            linkedOriginsCount: linkedOrigins.length,
+            linkedOrigins: linkedOrigins.map(o => ({ _id: o._id, origin: o.origin }))
           };
         })
       );
@@ -280,9 +298,26 @@ async function handler(req, res) {
 
         // Optionally propagate to linked MasterRate origins
         if (updateLinkedOrigins) {
+          const dabbiNameRegex = dabbi.name ? new RegExp(`^${escapeRegex(dabbi.name)}$`, 'i') : null;
+          const matchConditions = [
+            { dabbi: dabbi._id }
+          ];
+          if (dabbiNameRegex) {
+            matchConditions.push({ dabbiName: dabbiNameRegex });
+          }
+          // Also match origins with the OLD rates that don't have explicit dabbi link
+          if (oldBoxRate > 0) {
+            matchConditions.push({
+              boxRate: oldBoxRate,
+              boxReturnRate: oldBoxReturnRate,
+              dabbi: null,
+              dabbiName: { $in: [null, ''] }
+            });
+          }
+
           const linkedRates = await MasterRate.find({
             company: companyId,
-            $or: [{ dabbi: dabbi._id }, { dabbiName: dabbi.name }]
+            $or: matchConditions
           });
 
           const effectiveDate = effectiveFromDate ? new Date(effectiveFromDate) : new Date();
@@ -359,9 +394,23 @@ async function handler(req, res) {
       }
 
       // Check if origins are linked
+      const deleteMatchConditions = [
+        { dabbi: dabbi._id }
+      ];
+      if (dabbi.name) {
+        deleteMatchConditions.push({ dabbiName: new RegExp(`^${escapeRegex(dabbi.name)}$`, 'i') });
+      }
+      if (dabbi.boxRate != null && Number(dabbi.boxRate) > 0) {
+        deleteMatchConditions.push({
+          boxRate: Number(dabbi.boxRate),
+          boxReturnRate: Number(dabbi.boxReturnRate) || 0,
+          dabbi: null,
+          dabbiName: { $in: [null, ''] }
+        });
+      }
       const linkedCount = await MasterRate.countDocuments({
         company: companyId,
-        $or: [{ dabbi: dabbi._id }, { dabbiName: dabbi.name }]
+        $or: deleteMatchConditions
       });
 
       if (linkedCount > 0) {
