@@ -13,7 +13,8 @@ import {
   FaCalendarAlt,
   FaImage,
   FaExternalLinkAlt,
-  FaCheck
+  FaCheck,
+  FaCopy
 } from 'react-icons/fa';
 
 export default function DabbiManager({ isOpen, onClose, onDabbiUpdated }) {
@@ -27,6 +28,10 @@ export default function DabbiManager({ isOpen, onClose, onDabbiUpdated }) {
   const [editingDabbi, setEditingDabbi] = useState(null);
   const [saving, setSaving] = useState(false);
 
+  // Linked Origins Viewer State
+  const [viewingOriginsDabbi, setViewingOriginsDabbi] = useState(null);
+  const [originsSearch, setOriginsSearch] = useState('');
+
   // Form State for Add / Edit
   const [formData, setFormData] = useState({
     name: '',
@@ -37,7 +42,7 @@ export default function DabbiManager({ isOpen, onClose, onDabbiUpdated }) {
     isCorrection: true,
     effectiveFromDate: moment().format('YYYY-MM-DD'),
     note: '',
-    updateLinkedOrigins: false
+    updateLinkedOrigins: true
   });
 
   const fetchDabbis = useCallback(async () => {
@@ -75,6 +80,22 @@ export default function DabbiManager({ isOpen, onClose, onDabbiUpdated }) {
     );
   }, [dabbis, search]);
 
+  // Filter linked origins for viewing modal
+  const filteredLinkedOrigins = useMemo(() => {
+    if (!viewingOriginsDabbi || !Array.isArray(viewingOriginsDabbi.linkedOrigins)) return [];
+    if (!originsSearch.trim()) return viewingOriginsDabbi.linkedOrigins;
+    const q = originsSearch.trim().toLowerCase();
+    return viewingOriginsDabbi.linkedOrigins.filter(o =>
+      o.origin && o.origin.toLowerCase().includes(q)
+    );
+  }, [viewingOriginsDabbi, originsSearch]);
+
+  const handleCopyOrigin = (originName) => {
+    if (!originName) return;
+    navigator.clipboard?.writeText(originName);
+    toast.success(`Copied "${originName}"`, { autoClose: 1500 });
+  };
+
   const handleOpenAdd = () => {
     setFormData({
       name: '',
@@ -85,7 +106,7 @@ export default function DabbiManager({ isOpen, onClose, onDabbiUpdated }) {
       isCorrection: true,
       effectiveFromDate: moment().format('YYYY-MM-DD'),
       note: '',
-      updateLinkedOrigins: false
+      updateLinkedOrigins: true
     });
     setShowAddModal(true);
   };
@@ -101,7 +122,7 @@ export default function DabbiManager({ isOpen, onClose, onDabbiUpdated }) {
       isCorrection: true,
       effectiveFromDate: moment().format('YYYY-MM-DD'),
       note: '',
-      updateLinkedOrigins: false
+      updateLinkedOrigins: true
     });
     setShowEditModal(true);
   };
@@ -338,13 +359,27 @@ export default function DabbiManager({ isOpen, onClose, onDabbiUpdated }) {
                     </td>
 
                     <td className="px-3 py-3 text-center">
-                      <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${
-                        d.linkedOriginsCount > 0
-                          ? 'bg-blue-50 text-blue-700 border border-blue-200'
-                          : 'bg-gray-100 text-gray-500'
-                      }`}>
-                        {d.linkedOriginsCount || 0} origins
-                      </span>
+                      <button
+                        type="button"
+                        disabled={!d.linkedOriginsCount}
+                        onClick={() => {
+                          if (d.linkedOriginsCount > 0) {
+                            setViewingOriginsDabbi(d);
+                            setOriginsSearch('');
+                          }
+                        }}
+                        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold transition ${
+                          d.linkedOriginsCount > 0
+                            ? 'bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 hover:border-blue-300 shadow-2xs cursor-pointer'
+                            : 'bg-gray-100 text-gray-400 cursor-default'
+                        }`}
+                        title={d.linkedOriginsCount > 0 ? `Click to view all ${d.linkedOriginsCount} linked products` : 'No products linked'}
+                      >
+                        <span>{d.linkedOriginsCount || 0} origins</span>
+                        {d.linkedOriginsCount > 0 && (
+                          <span className="text-[10px] text-blue-500 font-normal">↗</span>
+                        )}
+                      </button>
                     </td>
 
                     <td className="px-4 py-3 text-center">
@@ -712,6 +747,135 @@ export default function DabbiManager({ isOpen, onClose, onDabbiUpdated }) {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* VIEW LINKED ORIGINS MODAL                                                 */}
+      {/* ========================================================================= */}
+      {viewingOriginsDabbi && (
+        <div
+          className="fixed inset-0 z-[70] overflow-y-auto bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in"
+          onClick={() => setViewingOriginsDabbi(null)}
+        >
+          <div
+            className="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-5 space-y-4 animate-in zoom-in-95 border border-gray-200 max-h-[85vh] flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-gray-100 pb-3">
+              <div className="flex items-center gap-3 min-w-0">
+                {viewingOriginsDabbi.imageUrl ? (
+                  <img
+                    src={viewingOriginsDabbi.imageUrl}
+                    alt={viewingOriginsDabbi.name}
+                    className="w-10 h-10 rounded-xl object-cover border border-gray-200 shrink-0 shadow-2xs"
+                  />
+                ) : (
+                  <div className="w-10 h-10 rounded-xl bg-purple-100 text-purple-700 flex items-center justify-center shrink-0">
+                    <FaBoxOpen className="w-5 h-5" />
+                  </div>
+                )}
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="text-sm font-black text-gray-900 truncate">
+                      {viewingOriginsDabbi.name}
+                    </h3>
+                    <span className="text-[11px] bg-blue-100 text-blue-800 font-bold px-2 py-0.5 rounded-full shrink-0">
+                      {viewingOriginsDabbi.linkedOriginsCount || 0} Products
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-gray-500 font-mono mt-0.5">
+                    Dispatch: <span className="text-emerald-700 font-bold">₹{Number(viewingOriginsDabbi.boxRate || 0).toFixed(2)}</span>
+                    {' '}| Return: <span className="text-purple-700 font-bold">₹{Number(viewingOriginsDabbi.boxReturnRate || 0).toFixed(2)}</span>
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setViewingOriginsDabbi(null)}
+                className="text-gray-400 hover:text-gray-600 p-1.5 rounded-lg hover:bg-gray-100 transition cursor-pointer shrink-0"
+              >
+                <FaTimes className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Search filter for origins */}
+            <div className="relative">
+              <FaSearch className="absolute left-3 top-2.5 text-gray-400 w-3 h-3" />
+              <input
+                type="text"
+                value={originsSearch}
+                onChange={(e) => setOriginsSearch(e.target.value)}
+                placeholder="Search origin product name..."
+                className="w-full pl-8 pr-8 py-2 border border-gray-300 rounded-lg text-xs focus:ring-2 focus:ring-purple-500 focus:outline-none"
+                autoFocus
+              />
+              {originsSearch && (
+                <button
+                  type="button"
+                  onClick={() => setOriginsSearch('')}
+                  className="absolute right-2.5 top-2.5 text-gray-400 hover:text-gray-600 cursor-pointer"
+                >
+                  <FaTimes className="w-3 h-3" />
+                </button>
+              )}
+            </div>
+
+            {/* Scrollable list of origins */}
+            <div className="flex-1 overflow-y-auto divide-y divide-gray-100 border border-gray-200 rounded-xl max-h-80 bg-gray-50/50">
+              {filteredLinkedOrigins.length === 0 ? (
+                <div className="p-8 text-center text-xs text-gray-400">
+                  {originsSearch ? (
+                    <div>
+                      <p className="font-semibold text-gray-600">No matching products</p>
+                      <p className="text-gray-400 mt-0.5">No products match &quot;{originsSearch}&quot;</p>
+                    </div>
+                  ) : (
+                    'No products linked to this dabbi.'
+                  )}
+                </div>
+              ) : (
+                filteredLinkedOrigins.map((item, idx) => (
+                  <div
+                    key={item._id || idx}
+                    className="flex items-center justify-between px-3.5 py-2.5 bg-white hover:bg-blue-50/60 transition group text-xs"
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                      <span className="text-[11px] font-mono text-gray-400 w-6 shrink-0 text-right">
+                        {idx + 1}.
+                      </span>
+                      <span className="font-semibold text-gray-800 truncate select-all">
+                        {item.origin}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleCopyOrigin(item.origin)}
+                      className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-purple-600 p-1.5 rounded transition text-xs cursor-pointer ml-2 shrink-0 hover:bg-purple-50"
+                      title="Copy product name"
+                    >
+                      <FaCopy className="w-3 h-3" />
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="flex items-center justify-between pt-2 border-t border-gray-100 text-xs">
+              <span className="text-gray-500 text-[11px]">
+                Showing <span className="font-bold text-gray-700">{filteredLinkedOrigins.length}</span> of {viewingOriginsDabbi.linkedOriginsCount || 0} origins
+              </span>
+              <button
+                type="button"
+                onClick={() => setViewingOriginsDabbi(null)}
+                className="px-4 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold rounded-lg transition cursor-pointer text-xs"
+              >
+                Close
+              </button>
+            </div>
           </div>
         </div>
       )}
