@@ -953,6 +953,10 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
     }
   };
 
+  const handlePrintFinalHisab = () => {
+    window.print();
+  };
+
   const { summary } = billingData;
   const totalReturnQty = summary.returnsQty + summary.customerReturnsQty;
   const overallReturnRate = summary.inventoryQty > 0
@@ -2446,10 +2450,10 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
       {/* ફાઈનલ હિસાબ (FINAL SETTLEMENT LEDGER MODAL)                                */}
       {/* ========================================================================= */}
       {isFinalHisabOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-black/60 backdrop-blur-xs animate-in fade-in">
-          <div className="bg-white rounded-3xl shadow-2xl border border-gray-200 w-full max-w-5xl max-h-[92vh] overflow-y-auto flex flex-col">
+        <div className="final-hisab-print-overlay fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-black/60 backdrop-blur-xs animate-in fade-in">
+          <div className="final-hisab-print-card bg-white rounded-3xl shadow-2xl border border-gray-200 w-full max-w-5xl max-h-[92vh] overflow-y-auto flex flex-col">
             {/* Modal Header */}
-            <div className="p-5 sm:p-6 border-b border-gray-100 flex items-center justify-between bg-gradient-to-r from-blue-900 via-indigo-900 to-slate-900 text-white rounded-t-3xl">
+            <div className="p-5 sm:p-6 border-b border-gray-100 flex items-center justify-between bg-gradient-to-r from-blue-900 via-indigo-900 to-slate-900 text-white rounded-t-3xl print:rounded-none print:py-3 print:px-4">
               <div>
                 <div className="flex items-center gap-2">
                   <span className="px-2.5 py-0.5 rounded-full bg-blue-500/30 text-blue-200 text-xs font-bold border border-blue-400/30">
@@ -2463,18 +2467,36 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
                   {getCompanyTitle()} નો ફાઈનલ હિસાબ (Final Settlement)
                 </h2>
               </div>
-              <button
-                type="button"
-                onClick={() => setIsFinalHisabOpen(false)}
-                className="w-9 h-9 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition cursor-pointer"
-              >
-                <FaTimes className="w-4 h-4" />
-              </button>
+              <div className="flex items-center gap-2 no-print">
+                <button
+                  type="button"
+                  onClick={handlePrintFinalHisab}
+                  className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold transition cursor-pointer border border-white/20 shadow-xs"
+                  title="Print ફાઈનલ હિસાબ"
+                >
+                  <FaPrint className="w-3.5 h-3.5 text-blue-300" />
+                  <span className="hidden sm:inline">Print</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsFinalHisabOpen(false)}
+                  className="w-9 h-9 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition cursor-pointer"
+                >
+                  <FaTimes className="w-4 h-4" />
+                </button>
+              </div>
             </div>
 
             {/* Modal Body: Two Column Settlement Sheet */}
-            <div className="p-5 sm:p-6 space-y-6 flex-1 bg-gray-50/50">
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div className="final-hisab-print-sheet p-5 sm:p-6 space-y-6 flex-1 bg-gray-50/50 print:bg-white print:p-2 print:space-y-4">
+              {/* Print Only Header Meta */}
+              <div className="hidden print:flex items-center justify-between text-[11px] text-gray-600 pb-2 border-b border-gray-300 font-medium">
+                <span>કંપની: <strong className="text-black">{getCompanyTitle()}</strong></span>
+                <span>સમયગાળો: <strong>{moment(startDate).format('DD/MM/YYYY')} થી {moment(endDate).format('DD/MM/YYYY')}</strong></span>
+                <span>પ્રિન્ટ તારીખ: <strong>{moment().format('DD/MM/YYYY, hh:mm A')}</strong></span>
+              </div>
+
+              <div className="final-hisab-print-grid grid grid-cols-1 lg:grid-cols-2 gap-6">
                 
                 {/* ================= LEFT COLUMN: GOODS SETTLEMENT ================= */}
                 <div className="bg-white rounded-2xl border border-gray-200 shadow-xs p-5 space-y-4">
@@ -2809,11 +2831,19 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
             </div>
 
             {/* Modal Footer Actions */}
-            <div className="p-4 sm:p-5 border-t border-gray-200 bg-white flex flex-wrap items-center justify-between gap-3 rounded-b-3xl">
+            <div className="p-4 sm:p-5 border-t border-gray-200 bg-white flex flex-wrap items-center justify-between gap-3 rounded-b-3xl no-print">
               <div className="text-xs text-gray-500 font-medium">
                 આ સેટલમેન્ટ એક્સેલ ફાઈલની <span className="font-bold text-gray-800">`ફાઈનલ હિસાબ`</span> શીટ સાથે ૧૦૦% મેળ ખાય છે.
               </div>
               <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handlePrintFinalHisab}
+                  className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-xs transition cursor-pointer"
+                >
+                  <FaPrint className="w-3.5 h-3.5" />
+                  <span>Print ફાઈનલ હિસાબ</span>
+                </button>
                 <button
                   type="button"
                   onClick={handleExportExcel}
