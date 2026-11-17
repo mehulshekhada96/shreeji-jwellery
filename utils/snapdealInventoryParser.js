@@ -2,56 +2,136 @@
  * Utility functions for parsing Snapdeal PDF invoices for SKU Inventory Reconciliation.
  */
 
-export function extractSnapdealSKU(lines, i) {
-  let name;
-  const SKUIndex = lines.findIndex(line => line.includes('SUBORDER CODE'));
-  if (SKUIndex > -1) {
-    const withPipeline = lines[SKUIndex + 1]?.trim()?.split('  ')?.[0]?.trim();
-    name = withPipeline?.split('|')?.[1]?.trim();
-  } else {
-    const PRODUCTNameIndex = lines.findIndex(line => line.includes('PRODUCT NAME'));
-    if (PRODUCTNameIndex > -1) {
-      const baseLine = lines[PRODUCTNameIndex];
-      if (baseLine) {
-        const fieldsCount = baseLine.split('  ').length;
-        for (let j = PRODUCTNameIndex + 1; j < lines.length; j++) {
-          const arr = lines[j]?.split('  ');
-          if (arr && arr.length === fieldsCount) {
-            name = arr[0]?.trim();
-            if (name?.includes('|')) {
-              name = name?.split('|')?.[1]?.trim();
-            }
-            break;
+export function extractSnapdealSKU(lines, i, originMap = null) {
+  const checkOrigin = (raw) => {
+    if (!originMap || originMap.size === 0 || !raw) return null;
+    const clean = raw.replace(/^[:|,]+|[:|,]+$/g, '').trim().toLowerCase();
+    if (originMap.has(clean)) return raw.replace(/^[:|,]+|[:|,]+$/g, '').trim();
+    const norm = clean.replace(/\s+/g, ' ');
+    if (originMap.has(norm)) return raw.replace(/^[:|,]+|[:|,]+$/g, '').trim();
+    return null;
+  };
+
+  // 1. Check for "SKU CODE: <SKU>" (common in tax invoices and combined Type 2 pages)
+  for (const line of lines) {
+    const match = line.match(/SKU\s*CODE\s*:\s*(.+)$/i);
+    if (match && match[1]) {
+      let val = match[1].split(/\b(?:COLOR|PACK|ORDER|HSN|SUBORDER|SIZE|QTY|RATE)\b/i)[0];
+      val = val.replace(/^[:|,]+|[:|,]+$/g, '').trim();
+      if (val) {
+        if (originMap && originMap.size > 0) {
+          const matched = checkOrigin(val);
+          if (matched) return matched;
+          const tokens = val.split(/\s+/).filter(Boolean);
+          let testSku = '';
+          for (let t = 0; t < tokens.length; t++) {
+            testSku = t === 0 ? tokens[0] : `${testSku} ${tokens[t]}`;
+            const tokenMatched = checkOrigin(testSku);
+            if (tokenMatched) return testSku;
           }
         }
+        return val;
       }
     }
   }
-  return name || `Page_${i}`;
-}
 
-export function extractSnapdealQuantity(lines) {
-  let qty = NaN;
-  const SKUIndex = lines.findIndex(line => line.includes('SUBORDER CODE'));
-  if (SKUIndex > -1) {
-    const numberWithSpace = lines[SKUIndex + 1]?.trim()?.split('  ')?.pop()?.trim();
-    qty = Number(numberWithSpace);
-  }
-  if (Number.isNaN(qty) && lines.findIndex(line => line.includes('PRODUCT NAME')) > -1) {
-    const PRODUCTNameIndex = lines.findIndex(line => line.includes('PRODUCT NAME'));
-    const baseLine = lines[PRODUCTNameIndex];
-    if (baseLine) {
-      const fieldsCount = baseLine.split('  ').length;
-      for (let j = PRODUCTNameIndex + 1; j < lines.length; j++) {
-        const arr = lines[j]?.split('  ');
-        if (arr && arr.length === fieldsCount) {
-          qty = Number(arr[arr.length - 1]);
-          break;
+  // 2. Search for a line containing '|' (used in both SUBORDER CODE and PRODUCT NAME tables on shipping labels)
+  const pipeLineIndex = lines.findIndex(line => line.includes('|'));
+  if (pipeLineIndex > -1) {
+    const line = lines[pipeLineIndex];
+    const afterPipe = line.slice(line.indexOf('|') + 1).trim();
+
+    let candidate = '';
+    if (afterPipe.length > 0) {
+      candidate = afterPipe;
+    } else if (pipeLineIndex + 1 < lines.length) {
+      candidate = lines[pipeLineIndex + 1]?.trim() || '';
+    }
+
+    if (candidate) {
+      const tokens = candidate.split(/\s+/).filter(Boolean);
+
+      // If we have an originMap, check if any prefix of tokens matches a known master SKU
+      if (originMap && originMap.size > 0) {
+        let testSku = '';
+        for (let t = 0; t < Math.min(tokens.length, 6); t++) {
+          testSku = t === 0 ? tokens[0] : `${testSku} ${tokens[t]}`;
+          const matched = checkOrigin(testSku);
+          if (matched) return testSku;
         }
       }
+
+      // Remove trailing quantity digit: e.g. "DOUBLE MOR ER 1" -> "DOUBLE MOR ER", "el_1101 1" -> "el_1101"
+      const withoutQty = candidate.replace(/\s+\d+\s*$/, '').trim();
+      if (withoutQty) {
+        const partsByDoubleSpace = withoutQty.split(/\s{2,}/);
+        if (partsByDoubleSpace[0]) {
+          const cleanPart = partsByDoubleSpace[0].replace(/^[:|,]+|[:|,]+$/g, '').trim();
+          if (cleanPart) return cleanPart;
+        }
+        return withoutQty.replace(/^[:|,]+|[:|,]+$/g, '').trim();
+      }
+
+      const cleanFirstToken = (tokens[0] || '').replace(/^[:|,]+|[:|,]+$/g, '').trim();
+      if (cleanFirstToken) return cleanFirstToken;
     }
   }
-  return Number.isNaN(qty) ? 0 : (qty || 0);
+
+  // 3. Fallback: Check lines after SUBORDER CODE or PRODUCT NAME header
+  const headerIndex = lines.findIndex(line =>
+    /SUBORDER\s+CODE|PRODUCT\s+NAME/i.test(line)
+  );
+  if (headerIndex > -1) {
+    for (let j = headerIndex + 1; j < Math.min(headerIndex + 5, lines.length); j++) {
+      const row = lines[j]?.trim();
+      if (!row || /^(?:QUANTITY|SELLER|GSTIN|PRICE|TOTAL|MRP|ITEM|CASH|AMOUNT)/i.test(row)) continue;
+
+      const tokens = row.split(/\s+/).filter(Boolean);
+      if (originMap && originMap.size > 0) {
+        let testSku = '';
+        for (let t = 0; t < Math.min(tokens.length, 6); t++) {
+          testSku = t === 0 ? tokens[0] : `${testSku} ${tokens[t]}`;
+          const matched = checkOrigin(testSku);
+          if (matched) return testSku;
+        }
+      }
+
+      const cleanRow = row.replace(/\s+\d+\s*$/, '').trim();
+      const parts = cleanRow.split(/\s{2,}/);
+      if (parts[0] && !parts[0].includes(':') && parts[0].length > 1) {
+        const firstPart = parts[0].replace(/^[:|,]+|[:|,]+$/g, '').trim();
+        if (firstPart) return firstPart;
+      }
+
+      if (tokens[0] && !tokens[0].includes(':') && tokens[0].length > 1) {
+        return tokens[0].replace(/^[:|,]+|[:|,]+$/g, '').trim();
+      }
+    }
+  }
+
+  return `Page_${i}`;
+}
+
+export function extractSnapdealQuantity(lines, pageText = '') {
+  const totalItemsMatch = (pageText || lines.join(' ')).match(/TOTAL\s*ITEMS\s*(\d+)/i);
+  if (totalItemsMatch) {
+    const q = parseInt(totalItemsMatch[1], 10);
+    if (!Number.isNaN(q) && q > 0) return q;
+  }
+
+  const pipeLineIndex = lines.findIndex(line => line.includes('|'));
+  if (pipeLineIndex > -1) {
+    for (let j = pipeLineIndex; j < Math.min(pipeLineIndex + 3, lines.length); j++) {
+      const line = lines[j]?.trim();
+      const endNumMatch = line?.match(/\s+(\d+)\s*$/);
+      if (endNumMatch) {
+        const q = parseInt(endNumMatch[1], 10);
+        if (!Number.isNaN(q) && q > 0 && q < 1000) return q;
+      }
+    }
+  }
+
+  return 1;
 }
 
 // Known Snapdeal seller companies — used as a reliable fallback match
@@ -151,15 +231,20 @@ export async function parseSnapdealPDF({
     const pageText = (textContent.items || []).map(item => item.str || '').join(' ').toUpperCase();
 
     const sku = extractSnapdealSKU(lines, i);
-    const qty = extractSnapdealQuantity(lines);
+    const qty = extractSnapdealQuantity(lines, pageText);
     const companyName = extractSnapdealCompany(lines) || 'Unknown Company';
 
-    const hasInvoice = pageText.includes('TAX INVOICE');
-    const hasNoValidSKU = sku.startsWith('Page_');
-
-    if (hasInvoice && hasNoValidSKU) {
+    const hasInvoice = /TAX\s+INVOICE/i.test(pageText);
+    const hasShippingLabel =
+      /CASH\s+TO\s+BE\s+COLLECTED|AMOUNT\s+ALREADY\s+PAID/i.test(pageText) ||
+      /SELLER\s+ADDRESS|SHIPPED\s+FROM/i.test(pageText) ||
+      /DELIVERY\s+ADDRESS/i.test(pageText) ||
+      /SNAPDEAL\s+REFERENCE/i.test(pageText) ||
+      /SUBORDER\s+CODE|PRODUCT\s+NAME/i.test(pageText);
+    if (hasInvoice && !hasShippingLabel) {
       continue;
     }
+    const hasNoValidSKU = sku.startsWith('Page_');
     if (hasNoValidSKU) continue;
 
     if (!results[companyName]) {
