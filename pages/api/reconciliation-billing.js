@@ -393,10 +393,10 @@ async function handler(req, res) {
       return dateMap.get(d);
     };
 
-    const getOrCreateSku = (rawSku) => {
+    const getOrCreateSku = (rawSku, orderDate) => {
       const cleanSku = (rawSku || '').trim();
       if (!skuMap.has(cleanSku)) {
-        const rateInfo = resolveRates(cleanSku);
+        const rateInfo = resolveRates(cleanSku, orderDate || startDate);
         skuMap.set(cleanSku, {
           sku: cleanSku,
           ...rateInfo,
@@ -443,7 +443,7 @@ async function handler(req, res) {
       dt.inventoryAmount += amount;
       dt.printCharge += printAmt;
 
-      const sk = getOrCreateSku(r.sku);
+      const sk = getOrCreateSku(r.sku, r.selectedDate);
       sk.inventoryQty += qty;
       sk.inventoryAmount += amount;
       sk.printCharge += printAmt;
@@ -469,7 +469,7 @@ async function handler(req, res) {
       dt.cancelledQty += qty;
       dt.cancelledAmount += amount;
 
-      const sk = getOrCreateSku(r.sku);
+      const sk = getOrCreateSku(r.sku, r.startDate || r.selectedDate);
       sk.cancelledQty += qty;
       sk.cancelledAmount += amount;
       if (r.companyName) sk.companies.add(getCanonicalName(r.companyName));
@@ -494,7 +494,7 @@ async function handler(req, res) {
       dt.returnsQty += qty;
       dt.returnsAmount += amount;
 
-      const sk = getOrCreateSku(r.sku);
+      const sk = getOrCreateSku(r.sku, r.startDate || r.selectedDate);
       sk.returnsQty += qty;
       sk.returnsAmount += amount;
       if (r.companyName) sk.companies.add(getCanonicalName(r.companyName));
@@ -523,7 +523,7 @@ async function handler(req, res) {
       dt.rawCustomerReturnsAmount += rawAmount;
       dt.customerReturnsAmount += effectiveAmount;
 
-      const sk = getOrCreateSku(r.sku);
+      const sk = getOrCreateSku(r.sku, r.startDate || r.selectedDate);
       sk.customerReturnsQty += qty;
       sk.rawCustomerReturnsAmount += rawAmount;
       sk.customerReturnsAmount += effectiveAmount;
