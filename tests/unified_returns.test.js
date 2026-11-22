@@ -28,20 +28,33 @@ test('Unified Returns: classifyReturnType handles all known types', () => {
   assert.equal(classifyReturnType('Courier_Return (Snapdeal)'), 'rto');
   assert.equal(classifyReturnType('Courier_Return'), 'rto');
   assert.equal(classifyReturnType('RTO'), 'rto');
+  assert.equal(classifyReturnType('FORWARD_RTO'), 'rto');
+  assert.equal(classifyReturnType('RTO_COMPLETE'), 'rto');
 
-  // Customer Return types
+  // Customer Return types (including RET and sub types)
   assert.equal(classifyReturnType('Customer Return'), 'customer');
   assert.equal(classifyReturnType('RETURN'), 'customer');
+  assert.equal(classifyReturnType('RET'), 'customer');
+  assert.equal(classifyReturnType('FIRST_RET'), 'customer');
+  assert.equal(classifyReturnType('SECOND_RET'), 'customer');
   assert.equal(classifyReturnType('RETURN (Snapdeal)'), 'customer');
   assert.equal(classifyReturnType('EXCHANGE'), 'customer');
   assert.equal(classifyReturnType('Buyer_Return'), 'customer');
   assert.equal(classifyReturnType('Buyer_Return (Snapdeal)'), 'customer');
   assert.equal(classifyReturnType('POST_EXCHANGE_RETURN'), 'customer');
 
-  // Unknown / irrelevant
+  // Custom keywords override / dynamic additions
+  assert.equal(classifyReturnType('MY_CUSTOM_RETURN', { 'MY_CUSTOM_RETURN': 'customer' }), 'customer');
+  assert.equal(classifyReturnType('COURIER_DAMAGED', { 'COURIER_DAMAGED': 'rto' }), 'rto');
+
+  // Known normal / non-return statuses
   assert.equal(classifyReturnType('Delivered'), null);
+  assert.equal(classifyReturnType('Shipped'), null);
   assert.equal(classifyReturnType(''), null);
   assert.equal(classifyReturnType(null), null);
+
+  // Unrecognized returns
+  assert.equal(classifyReturnType('UNKNOWN_RETURN_STATUS_XYZ'), 'unknown');
 });
 
 test('Unified Returns: parseRscanDate formats correctly', () => {
@@ -291,4 +304,73 @@ test('Unified Returns: Multi-platform parsing including Flipkart and Myntra', ()
   assert.equal(result.flipkartCustomerReturns[0].sku, 'SKU_FK_2');
   assert.equal(result.myntraReturns[0].sku, 'SKU_MYN_1');
   assert.equal(result.myntraCustomerReturns[0].sku, 'SKU_MYN_2');
+});
+
+test('Unified Returns: Dynamic return keywords and unrecognized keyword detection', () => {
+  const rows = [
+    {
+      platform: 'MEESHO',
+      return_type: 'CUSTOM_RTO_CODE',
+      'Sub Order No': 'SO_DYN_1',
+      awb: 'AWB_DYN_1',
+      Store: 'TEST_STORE',
+      listing_sku: 'SKU_DYN_1',
+      rscan_time: '22-11-2026 10:00 AM'
+    },
+    {
+      platform: 'MEESHO',
+      return_type: 'UNKNOWN_NEW_KEYWORD',
+      'Sub Order No': 'SO_DYN_2',
+      awb: 'AWB_DYN_2',
+      Store: 'TEST_STORE',
+      listing_sku: 'SKU_DYN_2',
+      rscan_time: '22-11-2026 10:10 AM'
+    }
+  ];
+
+  // Without custom keyword: UNKNOWN_NEW_KEYWORD and CUSTOM_RTO_CODE are flagged as unrecognized
+  const res1 = parseUnifiedReturnsRows(rows, { defaultDate: '2026-11-22' });
+  assert.ok(res1.unrecognizedReturnTypes.includes('CUSTOM_RTO_CODE'));
+  assert.ok(res1.unrecognizedReturnTypes.includes('UNKNOWN_NEW_KEYWORD'));
+  assert.equal(res1.counts.total, 0);
+
+  // With custom keywords supplied:
+  const res2 = parseUnifiedReturnsRows(rows, {
+    defaultDate: '2026-11-22',
+    customKeywords: {
+      'CUSTOM_RTO_CODE': 'rto',
+      'UNKNOWN_NEW_KEYWORD': 'customer'
+    }
+  });
+  assert.equal(res2.unrecognizedReturnTypes.length, 0);
+  assert.equal(res2.counts.meeshoReturns, 1);
+  assert.equal(res2.counts.meeshoCustomerReturns, 1);
+  assert.equal(res2.counts.total, 2);
+});
+
+test('Unified Returns: Real Order Report CSV correctly classifies RET as customer returns (Gopinath jewel = 36)', () => {
+  const filePath = '/Users/mehulshekhada/.gemini/antigravity/brain/b2b86074-32e9-4a20-835e-1f976246d16c/.user_uploaded/media_1795347976920_c3be4418.csv';
+  if (!fs.existsSync(filePath)) return;
+
+  const buf = fs.readFileSync(filePath);
+  const wb = XLSX.read(buf, { type: 'buffer' });
+  const data = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: '' });
+
+  const parsed = parseUnifiedReturnsRows(data, {
+    defaultDate: '2026-11-22',
+    useSelectedDateOnly: true
+  });
+
+  // Verify that all 15 RET returns are captured under meeshoCustomerReturns
+  const gopinathCustReturns = parsed.meeshoCustomerReturns.filter(r =>
+    r.companyName.toLowerCase().includes('gopinath')
+  );
+  const gopinathRtoReturns = parsed.meeshoReturns.filter(r =>
+    r.companyName.toLowerCase().includes('gopinath')
+  );
+
+  // Old portal was missing 15 returns (showed only 21 'RETURN' rows).
+  // New portal with 'RET' mapped has exactly 21 + 15 = 36 customer returns!
+  assert.equal(gopinathCustReturns.length, 36, 'Gopinath jewel must have exactly 36 customer returns (21 RETURN + 15 RET)');
+  assert.equal(gopinathRtoReturns.length, 31, 'Gopinath jewel must have 31 RTO returns (17 RTO + 14 Courier Return)');
 });

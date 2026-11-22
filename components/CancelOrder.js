@@ -3,7 +3,7 @@ import axios from 'axios';
 import * as XLSX from 'xlsx';
 import Calendar from 'react-calendar';
 import 'react-calendar/dist/Calendar.css';
-import { isUnifiedReturnsFile, parseUnifiedReturnsRows } from '../lib/unifiedReturnsParser';
+import { isUnifiedReturnsFile, parseUnifiedReturnsRows, DEFAULT_RETURN_KEYWORDS } from '../lib/unifiedReturnsParser';
 
 export default function CancelOrder({ apiPath = 'cancelled-orders', title = 'Cancelled Orders', platform = 'meesho' }) {
   const apiBase = `/api/${apiPath}`;
@@ -39,6 +39,24 @@ export default function CancelOrder({ apiPath = 'cancelled-orders', title = 'Can
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showMappingModal, setShowMappingModal] = useState(false);
+
+  // Return Keywords States
+  const [returnKeywords, setReturnKeywords] = useState({}); // { 'RET': 'customer', ... }
+  const [returnKeywordsList, setReturnKeywordsList] = useState([]);
+  const [showKeywordsManagerModal, setShowKeywordsManagerModal] = useState(false);
+  const [showKeywordPromptModal, setShowKeywordPromptModal] = useState(false);
+  const [unrecognizedKeywords, setUnrecognizedKeywords] = useState([]);
+  const [pendingKeywordMappings, setPendingKeywordMappings] = useState({});
+  const [saveKeywordsToDb, setSaveKeywordsToDb] = useState(true);
+  const [newKeywordInput, setNewKeywordInput] = useState('');
+  const [newKeywordCategory, setNewKeywordCategory] = useState('customer');
+
+  // Pre-Upload Portals Confirmation Modal States
+  const [showUploadConfirmModal, setShowUploadConfirmModal] = useState(false);
+  const [pendingUploadData, setPendingUploadData] = useState(null); // { targetDate, rawData, markAsHoliday, parsed }
+
+  // Cascade Deletion States
+  const [deleteScope, setDeleteScope] = useState('all'); // 'all' (all portals) or 'current' (current platform only)
   
   // Upload/Mapping States
   const [selectedFile, setSelectedFile] = useState(null);
@@ -61,6 +79,9 @@ export default function CancelOrder({ apiPath = 'cancelled-orders', title = 'Can
   useEffect(() => {
     initializeView();
     fetchEmailMappings();
+    if (isReturnsTab) {
+      fetchReturnKeywords();
+    }
     fetchCustomOrder();
     fetchUploadedDates();
   }, [platform]);
@@ -117,6 +138,59 @@ export default function CancelOrder({ apiPath = 'cancelled-orders', title = 'Can
       }
     } catch (err) {
       console.error('Error fetching email mappings:', err);
+    }
+  };
+
+  const fetchReturnKeywords = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      const { data } = await axios.get('/api/return-keyword-mapping', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (data.success && Array.isArray(data.mappings)) {
+        setReturnKeywordsList(data.mappings);
+        const map = {};
+        data.mappings.forEach(m => {
+          if (m.keyword && m.category) {
+            map[m.keyword.toUpperCase()] = m.category;
+          }
+        });
+        setReturnKeywords(map);
+      }
+    } catch (err) {
+      console.error('Error fetching return keywords:', err);
+    }
+  };
+
+  const handleSaveKeywordMapping = async (keyword, category) => {
+    try {
+      const token = localStorage.getItem('token');
+      const kw = String(keyword || newKeywordInput).trim().toUpperCase();
+      const cat = String(category || newKeywordCategory).toLowerCase();
+      if (!kw) return;
+      await axios.post('/api/return-keyword-mapping', { keyword: kw, category: cat }, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      await fetchReturnKeywords();
+      setNewKeywordInput('');
+    } catch (err) {
+      console.error('Error saving return keyword:', err);
+      setError('Failed to save return keyword');
+    }
+  };
+
+  const handleDeleteKeywordMapping = async (id, keyword) => {
+    if (!confirm(`Delete keyword mapping "${keyword}"?`)) return;
+    try {
+      const token = localStorage.getItem('token');
+      await axios.delete('/api/return-keyword-mapping', {
+        data: { id, keyword },
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      await fetchReturnKeywords();
+    } catch (err) {
+      console.error('Error deleting return keyword:', err);
+      setError('Failed to delete return keyword');
     }
   };
 
@@ -421,17 +495,46 @@ export default function CancelOrder({ apiPath = 'cancelled-orders', title = 'Can
 
       // Check for Unified Order Report (Only for Returns and Customer Returns tabs)
       if (isReturnsTab && isUnifiedReturnsFile(firstRow)) {
-        setUploadProgress({ percent: 45, message: 'Detected Unified Order Report. Classifying returns across Meesho & Snapdeal...' });
+        setUploadProgress({ percent: 45, message: 'Detected Unified Order Report. Classifying returns across all portals...' });
 
         const parsed = parseUnifiedReturnsRows(data, {
           emailMappings,
           defaultDate: uploadDate,
-          useSelectedDateOnly: true
+          useSelectedDateOnly: true,
+          customKeywords: returnKeywords
         });
 
+        // Step 1: Check for unrecognized return types
+        if (parsed.unrecognizedReturnTypes && parsed.unrecognizedReturnTypes.length > 0) {
+          setUnrecognizedKeywords(parsed.unrecognizedReturnTypes);
+          const initialMap = {};
+          parsed.unrecognizedReturnTypes.forEach(word => {
+            const w = word.toUpperCase();
+            initialMap[w] = (w.includes('RTO') || w.includes('COURIER')) ? 'rto' : 'customer';
+          });
+          setPendingKeywordMappings(initialMap);
+          setPendingUploadData({
+            targetDate: uploadDate,
+            rawData: data,
+            markAsHoliday,
+            parsed
+          });
+          setUploadProgress({ percent: 50, message: 'Unrecognized return words detected...' });
+          setShowKeywordPromptModal(true);
+          setLoading(false);
+          return;
+        }
+
+        // Step 2: Check for unmapped email/stores
         if (parsed.unmapped && parsed.unmapped.length > 0) {
           const unmappedSet = new Set(parsed.unmapped.map(u => u.email));
           setUnmappedEmails(unmappedSet);
+          setPendingUploadData({
+            targetDate: uploadDate,
+            rawData: data,
+            markAsHoliday,
+            parsed
+          });
           setUploadProgress({ percent: 60, message: 'Mapping required...' });
           setError(`Found ${unmappedSet.size} unmapped email(s)/store(s). Please map them to companies.`);
           setShowMappingModal(true);
@@ -439,58 +542,19 @@ export default function CancelOrder({ apiPath = 'cancelled-orders', title = 'Can
           return;
         }
 
-        const targetDate = uploadDate; // strictly prioritize user selected calendar date (Option 2)
-        setUploadProgress({ percent: 75, message: `Saving ${parsed.counts.total} returns across Meesho & Snapdeal for ${targetDate}...` });
-
-        const token = localStorage.getItem('token');
-        const { data: uploadRes } = await axios.post('/api/unified-returns-upload', {
-          date: targetDate,
-          meeshoReturns: parsed.meeshoReturns,
-          meeshoCustomerReturns: parsed.meeshoCustomerReturns,
-          snapdealReturns: parsed.snapdealReturns,
-          snapdealCustomerReturns: parsed.snapdealCustomerReturns,
-          flipkartReturns: parsed.flipkartReturns,
-          flipkartCustomerReturns: parsed.flipkartCustomerReturns,
-          myntraReturns: parsed.myntraReturns,
-          myntraCustomerReturns: parsed.myntraCustomerReturns
-        }, {
-          headers: { Authorization: `Bearer ${token}` }
+        // Step 3: All clear -> Show Pre-Upload Confirmation Modal (Portals Confirmation Modal)
+        // Do NOT save to database yet!
+        const targetDate = uploadDate;
+        setPendingUploadData({
+          targetDate,
+          rawData: data,
+          markAsHoliday,
+          parsed
         });
-
-        // Mark holiday if selected
-        if (markAsHoliday) {
-          try {
-            await axios.post('/api/sku-inventory/holidays', {
-              date: targetDate,
-              isHoliday: true
-            }, {
-              headers: { Authorization: `Bearer ${token}` }
-            });
-            setHolidays(prev => new Set([...prev, targetDate]));
-          } catch (holidayErr) {
-            console.error('Error marking holiday:', holidayErr);
-          }
-        }
-
-        setUploadProgress({ percent: 100, message: 'Upload complete!' });
-        setError(null);
-        setSuccess(true);
-        setStatus(`Successfully uploaded ${uploadRes.counts?.total || parsed.counts.total} returns across Meesho & Snapdeal for ${targetDate}`);
-        setSelectedFile(null);
+        setUploadProgress({ percent: 100, message: 'Ready for confirmation!' });
         setShowUploadModal(false);
+        setShowUploadConfirmModal(true);
         setLoading(false);
-        setUnifiedSummary({
-          message: uploadRes.message,
-          counts: uploadRes.counts,
-          duplicatesSkipped: parsed.duplicatesSkipped,
-          date: targetDate
-        });
-
-        await fetchUploadedDates();
-        if (filterStartDate && targetDate < filterStartDate) setFilterStartDate(targetDate);
-        if (filterEndDate && targetDate > filterEndDate) setFilterEndDate(targetDate);
-        await fetchCancelledOrders();
-        await fetchHolidays();
         return;
       }
       let styleIdKey = findHeaderKeyFromAlternatives(firstRow, ['Style Id', 'Style ID', 'SKU', 'Item', 'Product Code', 'Product', 'StyleId']);
@@ -635,6 +699,144 @@ export default function CancelOrder({ apiPath = 'cancelled-orders', title = 'Can
     }
   };
 
+  // --- Dynamic Keywords & Pre-Upload Confirmation Handlers ---
+
+  const handleApplyKeywordPrompt = async () => {
+    try {
+      setLoading(true);
+      const token = localStorage.getItem('token');
+      const updatedKeywords = { ...returnKeywords };
+
+      const batchToSave = [];
+      for (const [kw, cat] of Object.entries(pendingKeywordMappings)) {
+        updatedKeywords[kw.toUpperCase()] = cat;
+        if (saveKeywordsToDb) {
+          batchToSave.push({ keyword: kw.toUpperCase(), category: cat });
+        }
+      }
+
+      if (saveKeywordsToDb && batchToSave.length > 0) {
+        try {
+          await axios.post('/api/return-keyword-mapping', { mappings: batchToSave }, {
+            headers: { Authorization: `Bearer ${token}` }
+          });
+          await fetchReturnKeywords();
+        } catch (dbErr) {
+          console.error('Failed to persist keywords to DB:', dbErr);
+        }
+      }
+
+      setReturnKeywords(updatedKeywords);
+      setShowKeywordPromptModal(false);
+
+      if (pendingUploadData && pendingUploadData.rawData) {
+        const reParsed = parseUnifiedReturnsRows(pendingUploadData.rawData, {
+          emailMappings,
+          defaultDate: pendingUploadData.targetDate,
+          useSelectedDateOnly: true,
+          customKeywords: updatedKeywords
+        });
+
+        // Check if there are still unrecognized types
+        if (reParsed.unrecognizedReturnTypes && reParsed.unrecognizedReturnTypes.length > 0) {
+          setUnrecognizedKeywords(reParsed.unrecognizedReturnTypes);
+          const nextMap = {};
+          reParsed.unrecognizedReturnTypes.forEach(word => {
+            const w = word.toUpperCase();
+            nextMap[w] = (w.includes('RTO') || w.includes('COURIER')) ? 'rto' : 'customer';
+          });
+          setPendingKeywordMappings(nextMap);
+          setPendingUploadData(prev => ({ ...prev, parsed: reParsed }));
+          setShowKeywordPromptModal(true);
+          setLoading(false);
+          return;
+        }
+
+        // Check if there are unmapped emails
+        if (reParsed.unmapped && reParsed.unmapped.length > 0) {
+          const unmappedSet = new Set(reParsed.unmapped.map(u => u.email));
+          setUnmappedEmails(unmappedSet);
+          setPendingUploadData(prev => ({ ...prev, parsed: reParsed }));
+          setShowMappingModal(true);
+          setLoading(false);
+          return;
+        }
+
+        // Ready for Portals Confirmation Modal!
+        setPendingUploadData(prev => ({ ...prev, parsed: reParsed }));
+        setShowUploadModal(false);
+        setShowUploadConfirmModal(true);
+        setLoading(false);
+      }
+    } catch (err) {
+      console.error('Error applying keywords:', err);
+      setError('Failed to apply return keyword mappings');
+      setLoading(false);
+    }
+  };
+
+  const handleConfirmUnifiedUpload = async () => {
+    if (!pendingUploadData || !pendingUploadData.parsed) return;
+    try {
+      setLoading(true);
+      const { targetDate, parsed, markAsHoliday: shouldMarkHoliday } = pendingUploadData;
+      const token = localStorage.getItem('token');
+
+      const { data: uploadRes } = await axios.post('/api/unified-returns-upload', {
+        date: targetDate,
+        meeshoReturns: parsed.meeshoReturns,
+        meeshoCustomerReturns: parsed.meeshoCustomerReturns,
+        snapdealReturns: parsed.snapdealReturns,
+        snapdealCustomerReturns: parsed.snapdealCustomerReturns,
+        flipkartReturns: parsed.flipkartReturns,
+        flipkartCustomerReturns: parsed.flipkartCustomerReturns,
+        myntraReturns: parsed.myntraReturns,
+        myntraCustomerReturns: parsed.myntraCustomerReturns
+      }, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+
+      if (shouldMarkHoliday) {
+        try {
+          await axios.post('/api/sku-inventory/holidays', {
+            date: targetDate,
+            isHoliday: true
+          }, {
+            headers: { Authorization: `Bearer ${token}` }
+          });
+          setHolidays(prev => new Set([...prev, targetDate]));
+        } catch (holidayErr) {
+          console.error('Error marking holiday:', holidayErr);
+        }
+      }
+
+      setLoading(false);
+      setError(null);
+      setSuccess(true);
+      setStatus(`Successfully uploaded ${uploadRes.counts?.total || parsed.counts.total} returns across portals for ${targetDate}`);
+      setSelectedFile(null);
+      setShowUploadConfirmModal(false);
+      setPendingUploadData(null);
+      setUnifiedSummary({
+        message: uploadRes.message,
+        counts: uploadRes.counts,
+        duplicatesSkipped: parsed.duplicatesSkipped,
+        date: targetDate
+      });
+
+      await fetchUploadedDates();
+      if (filterStartDate && targetDate < filterStartDate) setFilterStartDate(targetDate);
+      if (filterEndDate && targetDate > filterEndDate) setFilterEndDate(targetDate);
+      await fetchCancelledOrders();
+      await fetchHolidays();
+      setTimeout(() => { setSuccess(false); setStatus(''); }, 5000);
+    } catch (err) {
+      console.error('Unified upload confirm error:', err);
+      setError(err.response?.data?.message || 'Failed to save unified returns');
+      setLoading(false);
+    }
+  };
+
   // --- Mapping Modal Logic ---
 
   const handleSaveMapping = async () => {
@@ -658,9 +860,6 @@ export default function CancelOrder({ apiPath = 'cancelled-orders', title = 'Can
       
       // Update unmapped list
       if (extractedData.length > 0) {
-        // Re-check unmapped
-        // We need to fetch fresh mappings first, which we did
-        // But we need to update the local state check
         const { data } = await axios.get('/api/company-email-mapping', { headers: { Authorization: `Bearer ${token}` } });
         const updatedMappings = data.mappings || [];
         const mappedEmails = new Set(updatedMappings.map(m => m.email.toLowerCase()));
@@ -669,9 +868,27 @@ export default function CancelOrder({ apiPath = 'cancelled-orders', title = 'Can
         setUnmappedEmails(unmapped);
         
         if (unmapped.size === 0) {
-           // All mapped!
            setSuccess(true);
            setStatus('All emails mapped. You can now upload.');
+        }
+      } else if (pendingUploadData && pendingUploadData.rawData) {
+        const { data } = await axios.get('/api/company-email-mapping', { headers: { Authorization: `Bearer ${token}` } });
+        const updatedMappings = data.mappings || [];
+        const reParsed = parseUnifiedReturnsRows(pendingUploadData.rawData, {
+          emailMappings: updatedMappings,
+          defaultDate: pendingUploadData.targetDate,
+          useSelectedDateOnly: true,
+          customKeywords: returnKeywords
+        });
+        if (reParsed.unmapped && reParsed.unmapped.length > 0) {
+          const unmappedSet = new Set(reParsed.unmapped.map(u => u.email));
+          setUnmappedEmails(unmappedSet);
+          setPendingUploadData(prev => ({ ...prev, parsed: reParsed }));
+        } else {
+          setUnmappedEmails(new Set());
+          setPendingUploadData(prev => ({ ...prev, parsed: reParsed }));
+          setSuccess(true);
+          setStatus('All emails mapped. You can now confirm upload.');
         }
       }
 
@@ -707,12 +924,26 @@ export default function CancelOrder({ apiPath = 'cancelled-orders', title = 'Can
     try {
       setLoading(true);
       const token = localStorage.getItem('token');
-      const { data } = await axios.delete(`${apiBase}?date=${deleteDate}&platform=${platform}`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      
-      setSuccess(true);
-      setStatus(data.message);
+
+      if (isReturnsTab && deleteScope === 'all') {
+        const { data } = await axios.delete('/api/unified-returns-delete', {
+          data: {
+            date: deleteDate,
+            allPlatforms: true,
+            deleteBoth: true
+          },
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        setSuccess(true);
+        setStatus(data.message || `Deleted all portal return records for ${deleteDate}`);
+      } else {
+        const { data } = await axios.delete(`${apiBase}?date=${deleteDate}&platform=${platform}`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        setSuccess(true);
+        setStatus(data.message);
+      }
+
       setShowDeleteModal(false);
       setDeleteDate('');
       
@@ -919,6 +1150,12 @@ export default function CancelOrder({ apiPath = 'cancelled-orders', title = 'Can
           <button onClick={() => setShowUploadModal(true)} className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm font-medium flex items-center gap-2">
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" /></svg> Upload
           </button>
+
+          {isReturnsTab && (
+            <button onClick={() => setShowKeywordsManagerModal(true)} className="px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors text-sm font-medium flex items-center gap-2" title="Manage dynamic return keywords (RET, RTO, etc.)">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" /></svg> Return Keywords
+            </button>
+          )}
 
           <button onClick={() => setShowDeleteModal(true)} className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors text-sm font-medium flex items-center gap-2">
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg> Delete
@@ -1280,30 +1517,483 @@ export default function CancelOrder({ apiPath = 'cancelled-orders', title = 'Can
             
             {unmappedEmails.size === 0 && (
                <div className="mt-4 pt-4 border-t flex justify-end">
-                 <button onClick={() => { setShowMappingModal(false); if(extractedData.length > 0) uploadToDatabase(extractedData); }} className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700">Continue Upload</button>
+                 <button onClick={() => {
+                   setShowMappingModal(false);
+                   if (pendingUploadData && pendingUploadData.parsed) {
+                     setShowUploadConfirmModal(true);
+                   } else if (extractedData.length > 0) {
+                     uploadToDatabase(extractedData);
+                   }
+                 }} className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700">Continue Upload</button>
                </div>
             )}
           </div>
         </div>
       )}
 
-      {/* Delete Modal */}
+      {/* Return Keyword Prompt Modal (Triggered when new unmapped words like RET, etc. are found) */}
+      {showKeywordPromptModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-lg w-full p-6 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-4 pb-3 border-b border-gray-200">
+              <div className="flex items-center gap-2">
+                <span className="text-xl">🏷️</span>
+                <h3 className="text-lg font-bold text-gray-900">Map Unrecognized Return Keywords</h3>
+              </div>
+              <button onClick={() => setShowKeywordPromptModal(false)} className="text-gray-400 hover:text-gray-600">
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+              </button>
+            </div>
+
+            <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-900">
+              <p className="font-semibold mb-1">New return word(s) detected in file:</p>
+              <p className="text-xs text-amber-800">
+                Please specify whether each new keyword represents a <strong>Customer Return</strong> or an <strong>RTO (Courier Return)</strong>.
+              </p>
+            </div>
+
+            <div className="space-y-4 mb-5">
+              {unrecognizedKeywords.map(word => {
+                const upperWord = word.toUpperCase();
+                const selectedCat = pendingKeywordMappings[upperWord] || 'customer';
+                return (
+                  <div key={word} className="p-3 bg-gray-50 border border-gray-200 rounded-lg">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="font-bold text-gray-900 bg-white px-2.5 py-1 rounded border border-gray-300 text-sm font-mono">
+                        {word}
+                      </span>
+                      <span className="text-xs text-gray-500 font-medium">Map to:</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 mt-2">
+                      <label className={`flex items-center gap-2 p-2 rounded-lg border cursor-pointer text-xs font-semibold transition-all ${
+                        selectedCat === 'customer'
+                          ? 'bg-purple-100 border-purple-500 text-purple-900 shadow-xs'
+                          : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'
+                      }`}>
+                        <input
+                          type="radio"
+                          name={`cat_${upperWord}`}
+                          value="customer"
+                          checked={selectedCat === 'customer'}
+                          onChange={() => setPendingKeywordMappings(prev => ({ ...prev, [upperWord]: 'customer' }))}
+                          className="text-purple-600 focus:ring-purple-500"
+                        />
+                        <span>Customer Return</span>
+                      </label>
+                      <label className={`flex items-center gap-2 p-2 rounded-lg border cursor-pointer text-xs font-semibold transition-all ${
+                        selectedCat === 'rto'
+                          ? 'bg-amber-100 border-amber-500 text-amber-900 shadow-xs'
+                          : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'
+                      }`}>
+                        <input
+                          type="radio"
+                          name={`cat_${upperWord}`}
+                          value="rto"
+                          checked={selectedCat === 'rto'}
+                          onChange={() => setPendingKeywordMappings(prev => ({ ...prev, [upperWord]: 'rto' }))}
+                          className="text-amber-600 focus:ring-amber-500"
+                        />
+                        <span>RTO Return</span>
+                      </label>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="mb-5 flex items-center">
+              <input
+                type="checkbox"
+                id="saveKeywordsToDb"
+                checked={saveKeywordsToDb}
+                onChange={(e) => setSaveKeywordsToDb(e.target.checked)}
+                className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+              />
+              <label htmlFor="saveKeywordsToDb" className="ml-2 block text-xs font-medium text-gray-700">
+                Save these mappings permanently for future file uploads
+              </label>
+            </div>
+
+            <div className="flex gap-3">
+              <button
+                onClick={handleApplyKeywordPrompt}
+                disabled={loading}
+                className="flex-1 py-2.5 px-4 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-300 font-bold text-sm transition-colors shadow-sm"
+              >
+                {loading ? 'Applying...' : 'Apply Mappings & Continue'}
+              </button>
+              <button
+                onClick={() => setShowKeywordPromptModal(false)}
+                disabled={loading}
+                className="py-2.5 px-4 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 font-medium text-sm transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Portals Pre-Upload Confirmation Modal */}
+      {showUploadConfirmModal && pendingUploadData && pendingUploadData.parsed && (
+        <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-xl w-full p-6 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-gray-200 mb-4">
+              <div className="flex items-center gap-2">
+                <span className="text-2xl">📦</span>
+                <div>
+                  <h3 className="text-lg font-bold text-gray-900">Confirm Returns Upload</h3>
+                  <p className="text-xs text-gray-500">Review distribution before saving to database</p>
+                </div>
+              </div>
+              <button onClick={() => setShowUploadConfirmModal(false)} className="text-gray-400 hover:text-gray-600">
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+              </button>
+            </div>
+
+            <div className="mb-4 px-4 py-2.5 bg-blue-50 border border-blue-200 rounded-lg flex items-center justify-between">
+              <span className="text-xs font-semibold text-blue-900 uppercase tracking-wider">Target Upload Date:</span>
+              <span className="text-sm font-bold text-blue-700 bg-white px-3 py-1 rounded border border-blue-200">
+                {pendingUploadData.targetDate}
+              </span>
+            </div>
+
+            <p className="text-xs font-bold text-gray-700 uppercase tracking-wider mb-2">Platform Breakdown:</p>
+            <div className="grid grid-cols-2 gap-3 mb-4">
+              {/* Meesho */}
+              <div className="p-3 bg-amber-50/60 border border-amber-200 rounded-lg">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="font-bold text-xs text-amber-900 uppercase">Meesho</span>
+                  <span className="text-xs font-black text-amber-800 bg-amber-100 px-2 py-0.5 rounded">
+                    {(pendingUploadData.parsed.counts?.meeshoReturns || 0) + (pendingUploadData.parsed.counts?.meeshoCustomerReturns || 0)}
+                  </span>
+                </div>
+                <div className="space-y-1 text-xs">
+                  <div className="flex justify-between text-gray-600">
+                    <span>RTO:</span>
+                    <strong className="text-amber-900">{pendingUploadData.parsed.counts?.meeshoReturns || 0}</strong>
+                  </div>
+                  <div className="flex justify-between text-gray-600">
+                    <span>Customer Return:</span>
+                    <strong className="text-purple-900">{pendingUploadData.parsed.counts?.meeshoCustomerReturns || 0}</strong>
+                  </div>
+                </div>
+              </div>
+
+              {/* Snapdeal */}
+              <div className="p-3 bg-orange-50/60 border border-orange-200 rounded-lg">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="font-bold text-xs text-orange-900 uppercase">Snapdeal</span>
+                  <span className="text-xs font-black text-orange-800 bg-orange-100 px-2 py-0.5 rounded">
+                    {(pendingUploadData.parsed.counts?.snapdealReturns || 0) + (pendingUploadData.parsed.counts?.snapdealCustomerReturns || 0)}
+                  </span>
+                </div>
+                <div className="space-y-1 text-xs">
+                  <div className="flex justify-between text-gray-600">
+                    <span>RTO:</span>
+                    <strong className="text-orange-900">{pendingUploadData.parsed.counts?.snapdealReturns || 0}</strong>
+                  </div>
+                  <div className="flex justify-between text-gray-600">
+                    <span>Customer Return:</span>
+                    <strong className="text-indigo-900">{pendingUploadData.parsed.counts?.snapdealCustomerReturns || 0}</strong>
+                  </div>
+                </div>
+              </div>
+
+              {/* Flipkart */}
+              <div className="p-3 bg-blue-50/60 border border-blue-200 rounded-lg">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="font-bold text-xs text-blue-900 uppercase">Flipkart</span>
+                  <span className="text-xs font-black text-blue-800 bg-blue-100 px-2 py-0.5 rounded">
+                    {(pendingUploadData.parsed.counts?.flipkartReturns || 0) + (pendingUploadData.parsed.counts?.flipkartCustomerReturns || 0)}
+                  </span>
+                </div>
+                <div className="space-y-1 text-xs">
+                  <div className="flex justify-between text-gray-600">
+                    <span>RTO:</span>
+                    <strong className="text-blue-900">{pendingUploadData.parsed.counts?.flipkartReturns || 0}</strong>
+                  </div>
+                  <div className="flex justify-between text-gray-600">
+                    <span>Customer Return:</span>
+                    <strong className="text-cyan-900">{pendingUploadData.parsed.counts?.flipkartCustomerReturns || 0}</strong>
+                  </div>
+                </div>
+              </div>
+
+              {/* Myntra */}
+              <div className="p-3 bg-pink-50/60 border border-pink-200 rounded-lg">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="font-bold text-xs text-pink-900 uppercase">Myntra</span>
+                  <span className="text-xs font-black text-pink-800 bg-pink-100 px-2 py-0.5 rounded">
+                    {(pendingUploadData.parsed.counts?.myntraReturns || 0) + (pendingUploadData.parsed.counts?.myntraCustomerReturns || 0)}
+                  </span>
+                </div>
+                <div className="space-y-1 text-xs">
+                  <div className="flex justify-between text-gray-600">
+                    <span>RTO:</span>
+                    <strong className="text-pink-900">{pendingUploadData.parsed.counts?.myntraReturns || 0}</strong>
+                  </div>
+                  <div className="flex justify-between text-gray-600">
+                    <span>Customer Return:</span>
+                    <strong className="text-rose-900">{pendingUploadData.parsed.counts?.myntraCustomerReturns || 0}</strong>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-lg mb-5 space-y-1 text-xs text-emerald-950">
+              <div className="flex justify-between items-center text-sm">
+                <span className="font-bold">Total Orders to Save:</span>
+                <span className="text-base font-black text-emerald-800">{pendingUploadData.parsed.counts?.total || 0}</span>
+              </div>
+              {pendingUploadData.parsed.duplicatesSkipped > 0 && (
+                <div className="text-xs text-amber-800 font-medium pt-1">
+                  ✓ {pendingUploadData.parsed.duplicatesSkipped} duplicate barcode scans automatically filtered out
+                </div>
+              )}
+              {pendingUploadData.markAsHoliday && (
+                <div className="text-xs text-yellow-800 font-medium pt-0.5">
+                  ★ Will also mark {pendingUploadData.targetDate} as Holiday in Inventory
+                </div>
+              )}
+            </div>
+
+            <div className="flex gap-3">
+              <button
+                onClick={handleConfirmUnifiedUpload}
+                disabled={loading}
+                className="flex-1 py-3 px-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold text-sm transition-all shadow-md hover:shadow-lg disabled:bg-gray-300"
+              >
+                {loading ? 'Saving to Database...' : 'Confirm & Save Records'}
+              </button>
+              <button
+                onClick={() => setShowUploadConfirmModal(false)}
+                disabled={loading}
+                className="py-3 px-4 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg font-medium text-sm transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Return Keywords Manager Modal */}
+      {showKeywordsManagerModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-xl w-full p-6 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-gray-200 mb-4">
+              <div className="flex items-center gap-2">
+                <span className="text-2xl">🏷️</span>
+                <h3 className="text-lg font-bold text-gray-900">Manage Return Keywords</h3>
+              </div>
+              <button onClick={() => setShowKeywordsManagerModal(false)} className="text-gray-400 hover:text-gray-600">
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+              </button>
+            </div>
+
+            <p className="text-xs text-gray-600 mb-4">
+              Map custom keywords (like <code>RET</code>, <code>RTO</code>, <code>EXCHANGE</code>) found in marketplace reports to either <strong>Customer Return</strong> or <strong>RTO Return</strong>.
+            </p>
+
+            {/* Add New Keyword Box */}
+            <div className="p-4 bg-gray-50 border border-gray-200 rounded-lg mb-5 space-y-3">
+              <h4 className="text-xs font-bold text-gray-700 uppercase tracking-wider">Add Dynamic Keyword</h4>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={newKeywordInput}
+                  onChange={(e) => setNewKeywordInput(e.target.value.toUpperCase())}
+                  placeholder="e.g. RET or COURIER_LOST"
+                  className="flex-1 px-3 py-2 border rounded-lg text-sm font-mono"
+                />
+                <select
+                  value={newKeywordCategory}
+                  onChange={(e) => setNewKeywordCategory(e.target.value)}
+                  className="px-3 py-2 border rounded-lg text-sm font-medium bg-white"
+                >
+                  <option value="customer">Customer Return</option>
+                  <option value="rto">RTO Return</option>
+                </select>
+                <button
+                  onClick={() => handleSaveKeywordMapping()}
+                  disabled={!newKeywordInput.trim()}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-300 font-bold text-sm"
+                >
+                  Add
+                </button>
+              </div>
+            </div>
+
+            {/* Custom Saved Keywords List */}
+            <div className="mb-5">
+              <h4 className="text-xs font-bold text-gray-700 uppercase tracking-wider mb-2">
+                Custom Saved Keywords ({returnKeywordsList.length})
+              </h4>
+              {returnKeywordsList.length === 0 ? (
+                <p className="text-xs text-gray-400 italic p-3 bg-gray-50 rounded border">No custom keywords saved yet.</p>
+              ) : (
+                <div className="space-y-2 max-h-48 overflow-y-auto">
+                  {returnKeywordsList.map(item => (
+                    <div key={item._id} className="flex items-center justify-between p-2.5 bg-gray-50 rounded-lg border border-gray-200">
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono font-bold text-sm text-gray-900">{item.keyword}</span>
+                        <span className={`px-2 py-0.5 rounded text-xs font-semibold ${
+                          item.category === 'customer' ? 'bg-purple-100 text-purple-800' : 'bg-amber-100 text-amber-800'
+                        }`}>
+                          {item.category === 'customer' ? 'Customer Return' : 'RTO'}
+                        </span>
+                      </div>
+                      <button
+                        onClick={() => handleDeleteKeywordMapping(item._id, item.keyword)}
+                        className="text-red-600 hover:text-red-800 text-xs font-semibold px-2 py-1 hover:bg-red-50 rounded"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Built-in Default Keywords List */}
+            <div>
+              <h4 className="text-xs font-bold text-gray-700 uppercase tracking-wider mb-2">Built-in Default Keywords</h4>
+              <div className="flex flex-wrap gap-1.5 p-3 bg-gray-50 rounded-lg border border-gray-200 max-h-36 overflow-y-auto">
+                {Object.entries(DEFAULT_RETURN_KEYWORDS).map(([kw, cat]) => (
+                  <span
+                    key={kw}
+                    className={`px-2 py-0.5 rounded text-[11px] font-mono border ${
+                      cat === 'customer' ? 'bg-purple-50 text-purple-700 border-purple-200' : 'bg-amber-50 text-amber-700 border-amber-200'
+                    }`}
+                  >
+                    {kw} ({cat === 'customer' ? 'Cust' : 'RTO'})
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            <div className="mt-5 pt-3 border-t flex justify-end">
+              <button
+                onClick={() => setShowKeywordsManagerModal(false)}
+                className="px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 text-sm font-medium"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Portals Deletion Modal */}
       {showDeleteModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg max-w-md w-full p-6">
-            <h3 className="text-lg font-bold text-gray-900 mb-4">Delete {title}</h3>
+        <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6">
+            <div className="flex items-center justify-between pb-3 border-b border-gray-200 mb-4">
+              <div className="flex items-center gap-2">
+                <span className="text-2xl text-red-600">🗑️</span>
+                <h3 className="text-lg font-bold text-gray-900">Delete Records by Date</h3>
+              </div>
+              <button onClick={() => setShowDeleteModal(false)} className="text-gray-400 hover:text-gray-600">
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+              </button>
+            </div>
+
             <div className="space-y-4">
-              <div className="p-4 bg-red-50 border-l-4 border-red-500 rounded-r-lg">
-                <p className="text-sm text-red-800 font-bold">⚠️ Permanent Action</p>
-                <p className="text-sm text-red-800">This will permanently delete ALL {title.toLowerCase()} for the selected date.</p>
+              <div className="p-3 bg-red-50 border-l-4 border-red-500 rounded-r-lg">
+                <p className="text-xs font-bold text-red-800 uppercase tracking-wider mb-0.5">⚠️ Permanent Action</p>
+                <p className="text-xs text-red-700">
+                  This will permanently delete records for the selected date from the chosen portal(s).
+                </p>
               </div>
+
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Select Date to Delete</label>
-                <input type="date" value={deleteDate} onChange={(e) => setDeleteDate(e.target.value)} className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500" />
+                <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1.5">
+                  Select Date to Delete
+                </label>
+                <input
+                  type="date"
+                  value={deleteDate}
+                  onChange={(e) => setDeleteDate(e.target.value)}
+                  className="w-full px-4 py-2.5 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 text-sm font-medium"
+                />
               </div>
-              <div className="flex gap-3">
-                <button onClick={handleDeleteData} disabled={loading || !deleteDate} className="flex-1 py-3 px-4 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:bg-gray-300 font-bold">Delete Permanently</button>
-                <button onClick={() => setShowDeleteModal(false)} disabled={loading} className="flex-1 py-3 px-4 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 font-medium">Cancel</button>
+
+              {/* Portals Selection Choice (Only for Returns/Customer Returns) */}
+              {isReturnsTab && (
+                <div className="space-y-2 pt-1 border-t border-gray-200">
+                  <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1">
+                    Portals Deletion Scope:
+                  </label>
+                  <label className={`flex items-start gap-2.5 p-3 rounded-lg border cursor-pointer transition-all ${
+                    deleteScope === 'all'
+                      ? 'bg-red-50/70 border-red-400 shadow-xs'
+                      : 'bg-white border-gray-200 hover:bg-gray-50'
+                  }`}>
+                    <input
+                      type="radio"
+                      name="deleteScope"
+                      value="all"
+                      checked={deleteScope === 'all'}
+                      onChange={() => setDeleteScope('all')}
+                      className="mt-0.5 text-red-600 focus:ring-red-500"
+                    />
+                    <div className="flex-1">
+                      <p className="text-xs font-bold text-gray-900">
+                        Delete across ALL Portals (Unified Cleanup)
+                      </p>
+                      <p className="text-[11px] text-gray-600 mt-0.5">
+                        Removes both RTO and Customer Returns across Meesho, Snapdeal, Flipkart, and Myntra for this date.
+                      </p>
+                      <div className="flex flex-wrap gap-1 mt-1.5">
+                        <span className="text-[10px] font-bold bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded">Meesho</span>
+                        <span className="text-[10px] font-bold bg-orange-100 text-orange-800 px-1.5 py-0.5 rounded">Snapdeal</span>
+                        <span className="text-[10px] font-bold bg-blue-100 text-blue-800 px-1.5 py-0.5 rounded">Flipkart</span>
+                        <span className="text-[10px] font-bold bg-pink-100 text-pink-800 px-1.5 py-0.5 rounded">Myntra</span>
+                      </div>
+                    </div>
+                  </label>
+
+                  <label className={`flex items-start gap-2.5 p-3 rounded-lg border cursor-pointer transition-all ${
+                    deleteScope === 'current'
+                      ? 'bg-gray-100 border-gray-400 shadow-xs'
+                      : 'bg-white border-gray-200 hover:bg-gray-50'
+                  }`}>
+                    <input
+                      type="radio"
+                      name="deleteScope"
+                      value="current"
+                      checked={deleteScope === 'current'}
+                      onChange={() => setDeleteScope('current')}
+                      className="mt-0.5 text-gray-600 focus:ring-gray-500"
+                    />
+                    <div>
+                      <p className="text-xs font-bold text-gray-900">
+                        Delete ONLY from {title} ({platform.toUpperCase()})
+                      </p>
+                      <p className="text-[11px] text-gray-500 mt-0.5">
+                        Only deletes records from the current active tab.
+                      </p>
+                    </div>
+                  </label>
+                </div>
+              )}
+
+              <div className="flex gap-3 pt-2">
+                <button
+                  onClick={handleDeleteData}
+                  disabled={loading || !deleteDate}
+                  className="flex-1 py-3 px-4 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:bg-gray-300 font-bold text-sm transition-colors shadow-sm"
+                >
+                  {loading ? 'Deleting...' : (isReturnsTab && deleteScope === 'all' ? 'Delete Across All Portals' : 'Delete Permanently')}
+                </button>
+                <button
+                  onClick={() => setShowDeleteModal(false)}
+                  disabled={loading}
+                  className="py-3 px-4 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 font-medium text-sm transition-colors"
+                >
+                  Cancel
+                </button>
               </div>
             </div>
           </div>
