@@ -3,7 +3,14 @@ import SkuInventory from '../../models/SkuInventory';
 import Company from '../../models/company';
 import { USER_ROLES } from '../../lib/constants';
 import connectToDatabase from '../../lib/mongodb';
-import { getCompanyMappingInfo, buildCompanyQueryFilter } from '../../lib/companyMappingHelper';
+import {
+    getCompanyMappingInfo,
+    buildCompanyQueryFilter,
+    DEFAULT_IGNORED_COMPANIES,
+    buildIgnoredCompanyDbFilter,
+    isGenuineCompanyName,
+    NON_GENUINE_COMPANY_REGEX
+} from '../../lib/companyMappingHelper';
 import zlib from 'zlib';
 import { promisify } from 'util';
 
@@ -35,6 +42,20 @@ async function handler(req, res) {
     if (req.method === 'GET') {
         try {
             const { startDate, endDate, companyName, sku, platform } = req.query;
+
+            // Soft-delete any corrupted non-company records or false snapdeal companies
+            await SkuInventory.updateMany(
+                {
+                    company: user.company,
+                    isDeleted: false,
+                    $or: [
+                        { companyName: NON_GENUINE_COMPANY_REGEX },
+                        { companyName: { $in: [...DEFAULT_IGNORED_COMPANIES] } },
+                        { platform: 'snapdeal', companyName: { $in: ['SHREEJI', 'JAY KHODAL CREATION', 'TOTAL', 'SHREEJI#', 'shreeji new'] } }
+                    ]
+                },
+                { $set: { isDeleted: true } }
+            ).catch(err => console.error('Error soft-deleting corrupted SkuInventory in GET:', err));
 
             // Build match stage for aggregation pipeline
             const matchStage = {
@@ -78,9 +99,8 @@ async function handler(req, res) {
 
             if (companyFilter) {
                 matchStage.companyName = companyFilter;
-            } else if (ignoredSet.size > 0) {
-                const ignoredRegexList = [...ignoredSet].map(c => new RegExp(`^${c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'));
-                matchStage.companyName = { $nin: ignoredRegexList };
+            } else {
+                matchStage.companyName = buildIgnoredCompanyDbFilter(ignoredSet);
             }
 
             // SKU filter
@@ -211,7 +231,7 @@ async function handler(req, res) {
             // Prepare bulk insert data (trim company names and SKUs)
             for (const companyName in skuData) {
                 const trimmedCompanyName = companyName.trim();
-                if (!trimmedCompanyName) continue; // Skip empty company names
+                if (!trimmedCompanyName || !isGenuineCompanyName(trimmedCompanyName) || DEFAULT_IGNORED_COMPANIES.has(trimmedCompanyName.toUpperCase())) continue;
                 
                 const skus = skuData[companyName];
                 for (const sku in skus) {

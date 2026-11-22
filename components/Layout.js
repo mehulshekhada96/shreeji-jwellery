@@ -317,7 +317,13 @@ const Layout = ({ children }) => {
                     menuKey="flipkart_recon"
                     submenu={[
                       { href: '/extract-sku?tab=flipkart-inventory', label: 'Flipkart Inventory', icon: SiFlipkart, flag: 'isSKUInventory' },
-                    ].filter(item => !item.flag || checkFeature(item.flag))}
+                      { href: '/extract-sku?tab=flipkart-returns', label: 'Returns', icon: FaUndo, flag: 'isReturns' },
+                      { href: '/extract-sku?tab=flipkart-customer-returns', label: 'Customer Returns', icon: FaUndo, flag: 'isCustomerReturns' },
+                      { href: '/extract-sku?tab=flipkart-reconciliation-billing', label: 'Billing & Revenue', icon: FaMoneyBillWave },
+                    ].filter(item => {
+                      if (item.label === 'Returns' || item.label === 'Customer Returns' || item.label === 'Billing & Revenue') return true;
+                      return !item.flag || checkFeature(item.flag);
+                    })}
                   />
                   <NavItem 
                     href="/extract-sku?tab=snapdeal-inventory" 
@@ -326,7 +332,14 @@ const Layout = ({ children }) => {
                     menuKey="snapdeal_recon"
                     submenu={[
                       { href: '/extract-sku?tab=snapdeal-inventory', label: 'Snapdeal Inventory', icon: FaTag, flag: 'isSKUInventory' },
-                    ].filter(item => !item.flag || checkFeature(item.flag))}
+                      { href: '/extract-sku?tab=snapdeal-cancelled-orders', label: 'Cancelled Orders', icon: FaTimesCircle, flag: 'isCancelledOrders' },
+                      { href: '/extract-sku?tab=snapdeal-returns', label: 'Returns', icon: FaUndo, flag: 'isReturns' },
+                      { href: '/extract-sku?tab=snapdeal-customer-returns', label: 'Customer Returns', icon: FaUndo, flag: 'isCustomerReturns' },
+                      { href: '/extract-sku?tab=snapdeal-reconciliation-billing', label: 'Billing & Revenue', icon: FaMoneyBillWave },
+                    ].filter(item => {
+                      if (item.label === 'Cancelled Orders' || item.label === 'Returns' || item.label === 'Customer Returns' || item.label === 'Billing & Revenue') return true;
+                      return !item.flag || checkFeature(item.flag);
+                    })}
                   />
                   <NavItem 
                     href="/extract-sku?tab=myntra-inventory" 
@@ -335,7 +348,13 @@ const Layout = ({ children }) => {
                     menuKey="myntra_recon"
                     submenu={[
                       { href: '/extract-sku?tab=myntra-inventory', label: 'Myntra Inventory', icon: FaBoxOpen, flag: 'isSKUInventory' },
-                    ].filter(item => !item.flag || checkFeature(item.flag))}
+                      { href: '/extract-sku?tab=myntra-returns', label: 'Returns', icon: FaUndo, flag: 'isReturns' },
+                      { href: '/extract-sku?tab=myntra-customer-returns', label: 'Customer Returns', icon: FaUndo, flag: 'isCustomerReturns' },
+                      { href: '/extract-sku?tab=myntra-reconciliation-billing', label: 'Billing & Revenue', icon: FaMoneyBillWave },
+                    ].filter(item => {
+                      if (item.label === 'Returns' || item.label === 'Customer Returns' || item.label === 'Billing & Revenue') return true;
+                      return !item.flag || checkFeature(item.flag);
+                    })}
                   />
                 </>
               )}

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { FaDatabase, FaCheckCircle, FaFileExcel, FaTimes, FaTrash } from 'react-icons/fa';
+import { isGenuineCompanyName } from '../lib/companyNameUtils';
 
 export default function SnapdealSort({
   allowed,
@@ -56,8 +57,10 @@ export default function SnapdealSort({
       }
     }
 
-    // 2. Search for a line containing '|' (used in both SUBORDER CODE and PRODUCT NAME tables on shipping labels)
-    const pipeLineIndex = lines.findIndex(line => line.includes('|'));
+    // 2. Search for a line containing '|' (used in both SUBORDER CODE and PRODUCT NAME tables on shipping labels, skipping header rows)
+    const pipeLineIndex = lines.findIndex(line =>
+      line.includes('|') && !/PRODUCT\s+NAME|SUBORDER\s+CODE/i.test(line.slice(line.indexOf('|') + 1))
+    );
     if (pipeLineIndex > -1) {
       const line = lines[pipeLineIndex];
       const afterPipe = line.slice(line.indexOf('|') + 1).trim();
@@ -159,7 +162,74 @@ export default function SnapdealSort({
   }
 
   function extractSnapdealCompany(lines) {
-    return lines[3]?.trim();
+    const cleanName = (name) => {
+      if (!name) return null;
+      let s = name.replace(/^[:|,\-\s]+|[:|,\-\s]+$/g, '').trim();
+      if (!isGenuineCompanyName(s)) return null;
+      return s;
+    };
+
+    // 1. Table row with SELLER and GSTIN:
+    // e.g. "el_1002_b NYALKARAN COSMO  24CPHPD1557F3Z6 1"
+    for (const line of lines) {
+      const gstinMatch = line.match(/(.+?)\s+([0-9]{2}[A-Z0-9]{13})\b/i);
+      if (gstinMatch) {
+        const beforeGstin = gstinMatch[1].trim();
+        const parts = beforeGstin.split(/\s{2,}/);
+        if (parts.length > 1) {
+          const candidate = cleanName(parts[parts.length - 1]);
+          if (candidate) return candidate;
+        }
+        const pipeIdx = beforeGstin.lastIndexOf('|');
+        const textAfterPipe = pipeIdx > -1 ? beforeGstin.slice(pipeIdx + 1).trim() : beforeGstin;
+        const tokens = textAfterPipe.split(/\s+/).filter(Boolean);
+        if (tokens.length >= 2) {
+          const companyTokens = tokens.slice(1).join(' ');
+          const candidate = cleanName(companyTokens);
+          if (candidate) return candidate;
+        }
+      }
+    }
+
+    // 2. Line immediately following "SELLER ADDRESS"
+    const sellerAddrIndex = lines.findIndex(l => /SELLER\s+ADDRESS/i.test(l));
+    if (sellerAddrIndex > -1) {
+      for (let j = sellerAddrIndex + 1; j < Math.min(sellerAddrIndex + 3, lines.length); j++) {
+        const candidate = cleanName(lines[j]);
+        if (candidate && !/PLOT|SHOP|FLAT|ROOM|BLOCK|BUILDING|NEAR|ROAD|STREET|SURAT|AHMEDABAD|DELHI|MUMBAI|PIN/i.test(candidate)) {
+          return candidate;
+        }
+      }
+    }
+
+    // 3. Tax Invoice "For <COMPANY>" or "SELLER BUYER"
+    for (const line of lines) {
+      const forMatch = line.match(/^For\s+([A-Za-z0-9\s.,'&_-]+?)(?:\s+Authorised|\s*$)/i);
+      if (forMatch) {
+        const candidate = cleanName(forMatch[1]);
+        if (candidate) return candidate;
+      }
+    }
+    const sellerBuyerIndex = lines.findIndex(l => /SELLER\s+BUYER/i.test(l));
+    if (sellerBuyerIndex > -1) {
+      const candidate = cleanName(lines[sellerBuyerIndex + 1]);
+      if (candidate) return candidate;
+    }
+
+    // 4. Return Address / Return to / Ship from
+    const returnMarkerIndex = lines.findIndex(line =>
+      /if undelivered|return address|return to|ship from/i.test(line)
+    );
+    if (returnMarkerIndex > -1) {
+      for (let j = returnMarkerIndex + 1; j < Math.min(returnMarkerIndex + 4, lines.length); j++) {
+        const candidate = cleanName(lines[j]?.split(',')[0]);
+        if (candidate && !/^\d+$/.test(candidate)) {
+          return candidate;
+        }
+      }
+    }
+
+    return 'Unknown Company';
   }
 
   const handleSnapdealSubmit = async (event) => {
@@ -243,6 +313,11 @@ export default function SnapdealSort({
         const textContent = await page.getTextContent();
         const lines = reconstructLinesFromTextItems(textContent.items || []);
         const pageText = (textContent.items || []).map(item => item.str || '').join(' ').toUpperCase();
+
+        // Skip packing slip error pages
+        if (/PACKSLIP\s+PRINT\s+FAILED|PRINT\s+FAILED/i.test(pageText)) {
+          continue;
+        }
 
         const sku = extractSnapdealSKU(lines, i, originMap);
         const qty = extractSnapdealQuantity(lines, pageText);

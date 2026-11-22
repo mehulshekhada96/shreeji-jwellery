@@ -4,6 +4,7 @@ import { toast } from 'react-toastify';
 import moment from 'moment';
 import * as XLSX from 'xlsx';
 import { useRouter } from 'next/router';
+import { isGenuineCompanyName } from '../lib/companyNameUtils';
 import {
   FaMoneyBillWave,
   FaCalendarAlt,
@@ -39,7 +40,7 @@ import {
 import DabbiSelect from './DabbiSelect';
 import { canWriteMasterSku, canWriteMasterRate } from '../lib/constants';
 
-export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateToMasterSku }) {
+export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateToMasterSku, platform: initialPlatform = 'meesho' }) {
   const router = useRouter();
 
   // Date filters (defaults to current month)
@@ -61,7 +62,13 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
   const [isMissingBannerDropdownOpen, setIsMissingBannerDropdownOpen] = useState(false);
 
   const [searchSku, setSearchSku] = useState('');
-  const [platform, setPlatform] = useState('meesho');
+  const [platform, setPlatform] = useState(initialPlatform);
+
+  useEffect(() => {
+    if (initialPlatform) {
+      setPlatform(initialPlatform);
+    }
+  }, [initialPlatform]);
   const [onlyMissingRates, setOnlyMissingRates] = useState(false);
   const [custReturnMinInput, setCustReturnMinInput] = useState('');
   const [custReturnMaxInput, setCustReturnMaxInput] = useState('');
@@ -1083,7 +1090,7 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
 
   // Sorted Companies with search support
   const displayedCompanies = useMemo(() => {
-    let list = billingData.companyWise || [];
+    let list = (billingData.companyWise || []).filter(c => c && isGenuineCompanyName(c.companyName));
     if (searchSku && searchSku.trim()) {
       const q = searchSku.trim().toLowerCase();
       list = list.filter(c => c.companyName && c.companyName.toLowerCase().includes(q));
@@ -1114,7 +1121,8 @@ export default function ReconciliationBilling({ onNavigateToOrigin, onNavigateTo
 
   // Unified company source list for dropdown
   const companiesSource = useMemo(() => {
-    return allCompanies.length > 0 ? allCompanies : (billingData.companiesList || []);
+    const list = allCompanies.length > 0 ? allCompanies : (billingData.companiesList || []);
+    return list.filter(c => isGenuineCompanyName(c));
   }, [allCompanies, billingData.companiesList]);
 
   // Filtered companies in the multi-select dropdown search

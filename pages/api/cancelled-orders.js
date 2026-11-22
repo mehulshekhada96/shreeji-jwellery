@@ -13,13 +13,19 @@ async function handler(req, res) {
     }
 
     if (method === 'GET') {
-      const { startDate, endDate, companyName, sku } = req.query;
+      const { startDate, endDate, companyName, sku, platform = 'meesho' } = req.query;
 
       // Base query - filter by user's company
       const query = { 
         isDeleted: false,
         company: user.company // Filter by user's company
       };
+
+      if (platform === 'meesho') {
+        query.platform = { $in: ['meesho', null, ''] };
+      } else if (platform) {
+        query.platform = platform;
+      }
 
       // Date filter - Aligning with SKU Inventory logic but supporting legacy selectedDate
       if (startDate || endDate) {
@@ -82,7 +88,7 @@ async function handler(req, res) {
     }
 
     if (method === 'POST') {
-      const { orders, startDate } = req.body;
+      const { orders, startDate, platform = 'meesho' } = req.body;
 
       if (!orders || !Array.isArray(orders) || orders.length === 0) {
         return res.status(400).json({ message: 'Orders array is required' });
@@ -113,6 +119,7 @@ async function handler(req, res) {
         endDate: dateObj, // Single date
         selectedDate: dateObj, // Save selectedDate as well for consistency
         company: user.company, // Add company reference
+        platform: platform || 'meesho',
         uploadedDate: new Date(),
         uploadedBy: user._id,
         uploadedByName: user.name || user.username,
@@ -128,7 +135,7 @@ async function handler(req, res) {
     }
 
     if (method === 'DELETE') {
-      const { date } = req.query;
+      const { date, platform = 'meesho' } = req.query;
 
       if (!date) {
         return res.status(400).json({ message: 'Date is required' });
@@ -142,16 +149,23 @@ async function handler(req, res) {
       const endOfDay = new Date(targetDate);
       endOfDay.setHours(23, 59, 59, 999);
 
-      // Soft delete records for this date (check both startDate and selectedDate) and company
+      const deleteQuery = {
+        $or: [
+          { startDate: { $gte: startOfDay, $lte: endOfDay } },
+          { selectedDate: { $gte: startOfDay, $lte: endOfDay } }
+        ],
+        company: user.company,
+        isDeleted: false
+      };
+      if (platform === 'meesho') {
+        deleteQuery.platform = { $in: ['meesho', null, ''] };
+      } else if (platform) {
+        deleteQuery.platform = platform;
+      }
+
+      // Soft delete records for this date and platform
       const result = await CancelledOrder.updateMany(
-        {
-          $or: [
-            { startDate: { $gte: startOfDay, $lte: endOfDay } },
-            { selectedDate: { $gte: startOfDay, $lte: endOfDay } }
-          ],
-          company: user.company, // Only delete records for user's company
-          isDeleted: false
-        },
+        deleteQuery,
         { isDeleted: true }
       );
 

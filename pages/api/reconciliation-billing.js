@@ -7,7 +7,16 @@ import MasterSku from '../../models/MasterSku';
 import MasterRate from '../../models/MasterRate';
 import Company from '../../models/company';
 import { authMiddleware } from './common/common.services';
-import { getCompanyMappingInfo, resolveCompanyName, buildCompanyQueryFilter, getAssignedCompaniesForUser } from '../../lib/companyMappingHelper';
+import {
+  getCompanyMappingInfo,
+  resolveCompanyName,
+  buildCompanyQueryFilter,
+  getAssignedCompaniesForUser,
+  buildIgnoredCompanyDbFilter,
+  isGenuineCompanyName,
+  NON_GENUINE_COMPANY_REGEX,
+  DEFAULT_IGNORED_COMPANIES
+} from '../../lib/companyMappingHelper';
 import moment from 'moment';
 
 export const config = {
@@ -27,6 +36,20 @@ async function handler(req, res) {
     }
 
     const companyId = user.company;
+
+    // Purge legacy corrupted non-company records (e.g. PACKSLIP PRINT FAILED, COD, PREPAID, false snapdeal companies, etc.)
+    await SkuInventory.updateMany(
+      {
+        company: companyId,
+        isDeleted: false,
+        $or: [
+          { companyName: NON_GENUINE_COMPANY_REGEX },
+          { companyName: { $in: [...DEFAULT_IGNORED_COMPANIES] } },
+          { platform: 'snapdeal', companyName: { $in: ['SHREEJI', 'JAY KHODAL CREATION', 'TOTAL', 'SHREEJI#', 'shreeji new'] } }
+        ]
+      },
+      { $set: { isDeleted: true } }
+    ).catch(err => console.error('Error soft-deleting corrupted SkuInventory records:', err));
     const {
       startDate,
       endDate,
@@ -50,7 +73,7 @@ async function handler(req, res) {
       selectedDate: dateQuery
     };
     if (platform === 'meesho') {
-      invMatch.platform = { $nin: ['flipkart', 'snapdeal', 'myntra'] };
+      invMatch.platform = { $nin: ['flipkart', 'snapdeal', 'myntra', 'amazon'] };
     } else if (platform) {
       invMatch.platform = platform;
     }
@@ -64,6 +87,11 @@ async function handler(req, res) {
         { selectedDate: dateQuery }
       ]
     };
+    if (platform === 'meesho') {
+      cancelMatch.platform = { $in: ['meesho', null, ''] };
+    } else if (platform) {
+      cancelMatch.platform = platform;
+    }
 
     // Returns
     const returnMatch = {
@@ -74,6 +102,11 @@ async function handler(req, res) {
         { selectedDate: dateQuery }
       ]
     };
+    if (platform === 'meesho') {
+      returnMatch.platform = { $in: ['meesho', null, ''] };
+    } else if (platform) {
+      returnMatch.platform = platform;
+    }
 
     // Customer Returns
     const custReturnMatch = {
@@ -84,6 +117,11 @@ async function handler(req, res) {
         { selectedDate: dateQuery }
       ]
     };
+    if (platform === 'meesho') {
+      custReturnMatch.platform = { $in: ['meesho', null, ''] };
+    } else if (platform) {
+      custReturnMatch.platform = platform;
+    }
 
     // Sheet Parameters:
     // Print / Packaging Rate (default ₹2.40 per dispatched quantity)
@@ -108,19 +146,17 @@ async function handler(req, res) {
       aliasMap: dynamicAliasMap
     });
 
+    const nonGenuineDbFilter = buildIgnoredCompanyDbFilter(ignoredCompanySet);
     if (companyQuery) {
       invMatch.companyName = companyQuery;
       cancelMatch.companyName = companyQuery;
       returnMatch.companyName = companyQuery;
       custReturnMatch.companyName = companyQuery;
-    } else if (ignoredCompanySet.size > 0) {
-      // Exclude all ignored/deleted non-company names directly at the database level!
-      const ignoredRegexList = [...ignoredCompanySet].map(c => new RegExp(`^${c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'));
-      const notIgnoredCondition = { $nin: ignoredRegexList };
-      invMatch.companyName = notIgnoredCondition;
-      cancelMatch.companyName = notIgnoredCondition;
-      returnMatch.companyName = notIgnoredCondition;
-      custReturnMatch.companyName = notIgnoredCondition;
+    } else {
+      invMatch.companyName = nonGenuineDbFilter;
+      cancelMatch.companyName = nonGenuineDbFilter;
+      returnMatch.companyName = nonGenuineDbFilter;
+      custReturnMatch.companyName = nonGenuineDbFilter;
     }
 
     if (sku && sku.trim()) {
@@ -226,9 +262,11 @@ async function handler(req, res) {
     const registerItem = (row) => {
       if (row.companyName) {
         const trimmed = row.companyName.trim();
-        if (!ignoredCompanySet.has(trimmed.toUpperCase())) {
+        if (isGenuineCompanyName(trimmed) && !ignoredCompanySet.has(trimmed.toUpperCase())) {
           const canonical = getCanonicalName(trimmed);
-          uniqueCompaniesSet.add(canonical);
+          if (isGenuineCompanyName(canonical) && !ignoredCompanySet.has(canonical.toUpperCase())) {
+            uniqueCompaniesSet.add(canonical);
+          }
         }
       }
     };
@@ -339,8 +377,14 @@ async function handler(req, res) {
     const skuMap = new Map();
 
     const getOrCreateCompany = (name) => {
-      const trimmed = (name || 'UNKNOWN COMPANY').trim();
+      const trimmed = (name || '').trim();
+      if (!isGenuineCompanyName(trimmed) || ignoredCompanySet.has(trimmed.toUpperCase())) {
+        return null;
+      }
       const canonicalName = getCanonicalName(trimmed);
+      if (!isGenuineCompanyName(canonicalName) || ignoredCompanySet.has(canonicalName.toUpperCase())) {
+        return null;
+      }
       const canonicalKey = canonicalName.toUpperCase();
       if (!companyMap.has(canonicalKey)) {
         companyMap.set(canonicalKey, {
@@ -434,9 +478,11 @@ async function handler(req, res) {
       summary.printCharge += printAmt;
 
       const comp = getOrCreateCompany(r.companyName);
-      comp.inventoryQty += qty;
-      comp.inventoryAmount += amount;
-      comp.printCharge += printAmt;
+      if (comp) {
+        comp.inventoryQty += qty;
+        comp.inventoryAmount += amount;
+        comp.printCharge += printAmt;
+      }
 
       const dt = getOrCreateDate(r.selectedDate);
       dt.inventoryQty += qty;
@@ -447,7 +493,7 @@ async function handler(req, res) {
       sk.inventoryQty += qty;
       sk.inventoryAmount += amount;
       sk.printCharge += printAmt;
-      if (r.companyName) sk.companies.add(getCanonicalName(r.companyName));
+      if (r.companyName && isGenuineCompanyName(r.companyName)) sk.companies.add(getCanonicalName(r.companyName));
     });
 
     // Process Cancelled Orders
@@ -462,8 +508,10 @@ async function handler(req, res) {
       summary.cancelledAmount += amount;
 
       const comp = getOrCreateCompany(r.companyName);
-      comp.cancelledQty += qty;
-      comp.cancelledAmount += amount;
+      if (comp) {
+        comp.cancelledQty += qty;
+        comp.cancelledAmount += amount;
+      }
 
       const dt = getOrCreateDate(r.startDate || r.selectedDate);
       dt.cancelledQty += qty;
@@ -472,7 +520,7 @@ async function handler(req, res) {
       const sk = getOrCreateSku(r.sku, r.startDate || r.selectedDate);
       sk.cancelledQty += qty;
       sk.cancelledAmount += amount;
-      if (r.companyName) sk.companies.add(getCanonicalName(r.companyName));
+      if (r.companyName && isGenuineCompanyName(r.companyName)) sk.companies.add(getCanonicalName(r.companyName));
     });
 
     // Process Courier Returns
@@ -487,8 +535,10 @@ async function handler(req, res) {
       summary.returnsAmount += amount;
 
       const comp = getOrCreateCompany(r.companyName);
-      comp.returnsQty += qty;
-      comp.returnsAmount += amount;
+      if (comp) {
+        comp.returnsQty += qty;
+        comp.returnsAmount += amount;
+      }
 
       const dt = getOrCreateDate(r.startDate || r.selectedDate);
       dt.returnsQty += qty;
@@ -497,7 +547,7 @@ async function handler(req, res) {
       const sk = getOrCreateSku(r.sku, r.startDate || r.selectedDate);
       sk.returnsQty += qty;
       sk.returnsAmount += amount;
-      if (r.companyName) sk.companies.add(getCanonicalName(r.companyName));
+      if (r.companyName && isGenuineCompanyName(r.companyName)) sk.companies.add(getCanonicalName(r.companyName));
     });
 
     // Process Customer Returns (85% Policy as in Customer Return sheet B9 = B8 * 0.85)
@@ -514,9 +564,11 @@ async function handler(req, res) {
       summary.customerReturnsAmount += effectiveAmount;
 
       const comp = getOrCreateCompany(r.companyName);
-      comp.customerReturnsQty += qty;
-      comp.rawCustomerReturnsAmount += rawAmount;
-      comp.customerReturnsAmount += effectiveAmount;
+      if (comp) {
+        comp.customerReturnsQty += qty;
+        comp.rawCustomerReturnsAmount += rawAmount;
+        comp.customerReturnsAmount += effectiveAmount;
+      }
 
       const dt = getOrCreateDate(r.startDate || r.selectedDate);
       dt.customerReturnsQty += qty;
@@ -527,7 +579,7 @@ async function handler(req, res) {
       sk.customerReturnsQty += qty;
       sk.rawCustomerReturnsAmount += rawAmount;
       sk.customerReturnsAmount += effectiveAmount;
-      if (r.companyName) sk.companies.add(getCanonicalName(r.companyName));
+      if (r.companyName && isGenuineCompanyName(r.companyName)) sk.companies.add(getCanonicalName(r.companyName));
     });
 
     // Calculate Nets & Totals (Sheet formula: Net Goods = Gross Dispatched - Total Returns)
@@ -621,32 +673,50 @@ async function handler(req, res) {
     if (Array.isArray(assigned)) {
       // For restricted managers, companiesList is strictly their assigned companies (empty if 0 assigned)
       companiesList = [...assigned]
-        .filter(c => !ignoredCompanySet.has(c.toUpperCase()))
+        .filter(c => isGenuineCompanyName(c) && !ignoredCompanySet.has(c.toUpperCase()))
         .sort((a, b) => a.localeCompare(b));
     } else {
       const allCompSet = new Set();
       uniqueCompaniesSet.forEach(c => {
         const clean = (c || '').trim();
-        if (clean && !ignoredCompanySet.has(clean.toUpperCase())) {
-          allCompSet.add(getCanonicalName(clean));
+        if (isGenuineCompanyName(clean) && !ignoredCompanySet.has(clean.toUpperCase())) {
+          const canon = getCanonicalName(clean);
+          if (isGenuineCompanyName(canon) && !ignoredCompanySet.has(canon.toUpperCase())) {
+            allCompSet.add(canon);
+          }
         }
       });
 
-      // ALWAYS include all distinct companies from SkuInventory for this account
-      // so the dropdown list is ALWAYS complete and consistent (never jumping between 33 and 36)
-      const allDistinctComps = await SkuInventory.distinct('companyName', {
+      // ALWAYS include all distinct companies from SkuInventory for this account and platform
+      // so the dropdown list is ALWAYS complete and consistent
+      const distinctQuery = {
         company: companyId,
-        isDeleted: false
-      });
+        isDeleted: false,
+        companyName: nonGenuineDbFilter
+      };
+      if (platform === 'meesho') {
+        distinctQuery.platform = { $nin: ['flipkart', 'snapdeal', 'myntra', 'amazon'] };
+      } else if (platform) {
+        distinctQuery.platform = platform;
+      }
+      const [allDistinctInv, allDistinctRet, allDistinctCust] = await Promise.all([
+        SkuInventory.distinct('companyName', distinctQuery),
+        ReturnOrder.distinct('companyName', distinctQuery),
+        CustomerReturnOrder.distinct('companyName', distinctQuery)
+      ]);
+      const allDistinctComps = [...new Set([...allDistinctInv, ...allDistinctRet, ...allDistinctCust])];
       allDistinctComps.forEach(c => {
         const clean = (c || '').trim();
-        if (clean && !ignoredCompanySet.has(clean.toUpperCase())) {
-          allCompSet.add(getCanonicalName(clean));
+        if (isGenuineCompanyName(clean) && !ignoredCompanySet.has(clean.toUpperCase())) {
+          const canon = getCanonicalName(clean);
+          if (isGenuineCompanyName(canon) && !ignoredCompanySet.has(canon.toUpperCase())) {
+            allCompSet.add(canon);
+          }
         }
       });
 
       companiesList = Array.from(allCompSet)
-        .filter(c => !ignoredCompanySet.has(c.toUpperCase()))
+        .filter(c => isGenuineCompanyName(c) && !ignoredCompanySet.has(c.toUpperCase()))
         .sort((a, b) => a.localeCompare(b));
     }
 

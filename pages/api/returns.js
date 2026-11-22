@@ -12,12 +12,18 @@ async function handler(req, res) {
     }
 
     if (method === 'GET') {
-      const { startDate, endDate, companyName, sku } = req.query;
+      const { startDate, endDate, companyName, sku, platform = 'meesho' } = req.query;
 
       const query = {
         isDeleted: false,
         company: user.company
       };
+
+      if (platform === 'meesho') {
+        query.platform = { $in: ['meesho', null, ''] };
+      } else if (platform) {
+        query.platform = platform;
+      }
 
       if (startDate || endDate) {
         const start = startDate ? new Date(startDate) : null;
@@ -62,15 +68,8 @@ async function handler(req, res) {
             },
             totalQuantity: { $sum: "$quantity" }
           }
-        },
-        {
-          $sort: {
-            "_id.startDate": -1,
-            "_id.companyName": 1,
-            "_id.sku": 1
-          }
         }
-      ]).allowDiskUse(true);
+      ]);
 
       const aggregated = {};
       const dateCompanyMap = {};
@@ -119,7 +118,7 @@ async function handler(req, res) {
     }
 
     if (method === 'POST') {
-      const { orders, startDate } = req.body;
+      const { orders, startDate, platform = 'meesho' } = req.body;
 
       if (!orders || !Array.isArray(orders) || orders.length === 0) {
         return res.status(400).json({ message: 'Orders array is required' });
@@ -146,6 +145,7 @@ async function handler(req, res) {
         endDate: dateObj,
         selectedDate: dateObj,
         company: user.company,
+        platform: platform || 'meesho',
         uploadedDate: new Date(),
         uploadedBy: user._id,
         uploadedByName: user.name || user.username,
@@ -161,7 +161,7 @@ async function handler(req, res) {
     }
 
     if (method === 'DELETE') {
-      const { date } = req.query;
+      const { date, platform = 'meesho' } = req.query;
 
       if (!date) {
         return res.status(400).json({ message: 'Date is required' });
@@ -174,15 +174,22 @@ async function handler(req, res) {
       const endOfDay = new Date(targetDate);
       endOfDay.setHours(23, 59, 59, 999);
 
+      const deleteQuery = {
+        $or: [
+          { startDate: { $gte: startOfDay, $lte: endOfDay } },
+          { selectedDate: { $gte: startOfDay, $lte: endOfDay } }
+        ],
+        company: user.company,
+        isDeleted: false
+      };
+      if (platform === 'meesho') {
+        deleteQuery.platform = { $in: ['meesho', null, ''] };
+      } else if (platform) {
+        deleteQuery.platform = platform;
+      }
+
       const result = await ReturnOrder.updateMany(
-        {
-          $or: [
-            { startDate: { $gte: startOfDay, $lte: endOfDay } },
-            { selectedDate: { $gte: startOfDay, $lte: endOfDay } }
-          ],
-          company: user.company,
-          isDeleted: false
-        },
+        deleteQuery,
         { isDeleted: true }
       );
 

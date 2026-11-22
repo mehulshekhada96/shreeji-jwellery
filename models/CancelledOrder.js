@@ -23,6 +23,11 @@ const CancelledOrderSchema = new mongoose.Schema({
     type: String, 
     required: false 
   },
+  platform: {
+    type: String,
+    index: true,
+    default: 'meesho'
+  },
   isDeleted: { type: Boolean, default: false },
 }, { timestamps: true });
 
