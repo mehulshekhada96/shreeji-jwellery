@@ -43,20 +43,6 @@ async function handler(req, res) {
         try {
             const { startDate, endDate, companyName, sku, platform } = req.query;
 
-            // Soft-delete any corrupted non-company records or false snapdeal companies
-            await SkuInventory.updateMany(
-                {
-                    company: user.company,
-                    isDeleted: false,
-                    $or: [
-                        { companyName: NON_GENUINE_COMPANY_REGEX },
-                        { companyName: { $in: [...DEFAULT_IGNORED_COMPANIES] } },
-                        { platform: 'snapdeal', companyName: { $in: ['SHREEJI', 'JAY KHODAL CREATION', 'TOTAL', 'SHREEJI#', 'shreeji new'] } }
-                    ]
-                },
-                { $set: { isDeleted: true } }
-            ).catch(err => console.error('Error soft-deleting corrupted SkuInventory in GET:', err));
-
             // Build match stage for aggregation pipeline
             const matchStage = {
                 company: user.company,
@@ -76,7 +62,7 @@ async function handler(req, res) {
                 matchStage.platform = { $nin: ['flipkart', 'snapdeal', 'myntra', 'amazon'] };
             }
 
-            // Date filter
+            // Date filter (default to current month if unconstrained to prevent Vercel 10s/60s timeouts on full-table scans)
             if (startDate || endDate) {
                 matchStage.selectedDate = {};
                 if (startDate) {
@@ -87,6 +73,14 @@ async function handler(req, res) {
                     endDateTime.setHours(23, 59, 59, 999);
                     matchStage.selectedDate.$lte = endDateTime;
                 }
+            } else {
+                const now = new Date();
+                const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+                const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+                matchStage.selectedDate = {
+                    $gte: startOfMonth,
+                    $lte: endOfMonth
+                };
             }
 
             // Company name filter with mapped alias expansion and manager assigned company isolation

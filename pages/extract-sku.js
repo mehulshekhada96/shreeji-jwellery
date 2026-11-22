@@ -198,25 +198,28 @@ export default function ExtractSKU() {
   };
 
   // SKU Inventory Management Functions - moved before useEffect hooks
-  const fetchInventoryData = useCallback(async () => {
+  const fetchInventoryData = useCallback(async (overrideStart, overrideEnd) => {
     try {
       setLoading(true);
       setError(null);
       const token = localStorage.getItem('token');
+
+      const startToUse = overrideStart !== undefined ? overrideStart : filterStartDate;
+      const endToUse = overrideEnd !== undefined ? overrideEnd : filterEndDate;
       
       // Determine if we need to split the query
-      const needsSplitting = filterStartDate && filterEndDate;
+      const needsSplitting = Boolean(startToUse && endToUse);
       let allData = { data: {}, rawData: [] };
       
       if (needsSplitting) {
         // Calculate days between dates
-        const start = new Date(filterStartDate);
-        const end = new Date(filterEndDate);
+        const start = new Date(startToUse);
+        const end = new Date(endToUse);
         const daysDiff = Math.ceil((end - start) / (1000 * 60 * 60 * 24));
         
         // If > 60 days, split into monthly chunks
         if (daysDiff > 60) {
-          const chunks = splitDateRangeIntoMonths(filterStartDate, filterEndDate);
+          const chunks = splitDateRangeIntoMonths(startToUse, endToUse);
           
           setStatus(`Loading ${chunks.length} months of data...`);
           
@@ -267,8 +270,8 @@ export default function ExtractSKU() {
         } else {
           // Date range is small enough, fetch normally
           const params = new URLSearchParams();
-          if (filterStartDate) params.append('startDate', filterStartDate);
-          if (filterEndDate) params.append('endDate', filterEndDate);
+          if (startToUse) params.append('startDate', startToUse);
+          if (endToUse) params.append('endDate', endToUse);
           if (filterCompany) params.append('companyName', filterCompany);
           if (filterSKU) params.append('sku', filterSKU);
           params.append('platform', currentPlatform);
@@ -551,12 +554,8 @@ export default function ExtractSKU() {
         await fetchFilterOptions();
         await fetchCustomOrder();
         
-        // Auto-fetch data whenever switching to an inventory tab
-        setTimeout(() => {
-          // fetchInventoryData relies on state, so we might need a small delay
-          // actually, it's better to fetch data immediately
-          fetchInventoryData();
-        }, 100);
+        // Auto-fetch data passing startDate & endDate explicitly to avoid race condition!
+        fetchInventoryData(startDate, endDate);
       };
       initInventory();
     }
