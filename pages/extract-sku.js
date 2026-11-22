@@ -121,11 +121,11 @@ export default function ExtractSKU() {
       } else if (['inventory', 'cancelled-orders', 'returns', 'customer-returns', 'reconciliation-billing', 'billing'].includes(tab)) {
         setMainTab('meesho_reconciliation');
         if (tab === 'billing') setSelectedTab('reconciliation-billing');
-      } else if (tab === 'flipkart-inventory') {
+      } else if (['flipkart-inventory', 'flipkart-returns', 'flipkart-customer-returns', 'flipkart-reconciliation-billing'].includes(tab)) {
         setMainTab('flipkart_reconciliation');
-      } else if (tab === 'snapdeal-inventory') {
+      } else if (['snapdeal-inventory', 'snapdeal-cancelled-orders', 'snapdeal-returns', 'snapdeal-customer-returns', 'snapdeal-reconciliation-billing'].includes(tab)) {
         setMainTab('snapdeal_reconciliation');
-      } else if (tab === 'myntra-inventory') {
+      } else if (['myntra-inventory', 'myntra-returns', 'myntra-customer-returns', 'myntra-reconciliation-billing'].includes(tab)) {
         setMainTab('myntra_reconciliation');
       }
     }
@@ -1954,7 +1954,9 @@ export default function ExtractSKU() {
               <button
                 onClick={() => {
                   setMainTab('flipkart_reconciliation');
-                  if (selectedTab !== 'flipkart-inventory') setSelectedTab('flipkart-inventory');
+                  if (!['flipkart-inventory', 'flipkart-returns', 'flipkart-customer-returns', 'flipkart-reconciliation-billing'].includes(selectedTab)) {
+                    setSelectedTab('flipkart-inventory');
+                  }
                 }}
                 className={`py-3 px-1 border-b-2 font-medium text-sm transition-all duration-200 ${
                   mainTab === 'flipkart_reconciliation'
@@ -1967,7 +1969,9 @@ export default function ExtractSKU() {
               <button
                 onClick={() => {
                   setMainTab('snapdeal_reconciliation');
-                  if (selectedTab !== 'snapdeal-inventory') setSelectedTab('snapdeal-inventory');
+                  if (!['snapdeal-inventory', 'snapdeal-cancelled-orders', 'snapdeal-returns', 'snapdeal-customer-returns', 'snapdeal-reconciliation-billing'].includes(selectedTab)) {
+                    setSelectedTab('snapdeal-inventory');
+                  }
                 }}
                 className={`py-3 px-1 border-b-2 font-medium text-sm transition-all duration-200 ${
                   mainTab === 'snapdeal_reconciliation'
@@ -1980,7 +1984,9 @@ export default function ExtractSKU() {
               <button
                 onClick={() => {
                   setMainTab('myntra_reconciliation');
-                  if (selectedTab !== 'myntra-inventory') setSelectedTab('myntra-inventory');
+                  if (!['myntra-inventory', 'myntra-returns', 'myntra-customer-returns', 'myntra-reconciliation-billing'].includes(selectedTab)) {
+                    setSelectedTab('myntra-inventory');
+                  }
                 }}
                 className={`py-3 px-1 border-b-2 font-medium text-sm transition-all duration-200 ${
                   mainTab === 'myntra_reconciliation'
@@ -2233,6 +2239,51 @@ export default function ExtractSKU() {
                 <span>Flipkart Inventory</span>
               </div>
             </button>
+            <button
+              onClick={() => setSelectedTab('flipkart-returns')}
+              disabled={!flagsLoading && !checkFeature('isReturns')}
+              className={`py-3 px-1 border-b-2 font-medium text-sm transition-all duration-200 ${
+                selectedTab === 'flipkart-returns'
+                  ? 'border-yellow-400 text-yellow-400'
+                  : 'border-transparent text-white hover:text-gray-100 hover:border-gray-500'
+              } ${!flagsLoading && !checkFeature('isReturns') ? 'opacity-50 cursor-not-allowed' : ''}`}
+            >
+              <div className="flex items-center space-x-2">
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+                </svg>
+                <span>Returns</span>
+              </div>
+            </button>
+            <button
+              onClick={() => setSelectedTab('flipkart-customer-returns')}
+              disabled={!flagsLoading && !checkFeature('isCustomerReturns')}
+              className={`py-3 px-1 border-b-2 font-medium text-sm transition-all duration-200 ${
+                selectedTab === 'flipkart-customer-returns'
+                  ? 'border-yellow-400 text-yellow-400'
+                  : 'border-transparent text-white hover:text-gray-100 hover:border-gray-500'
+              } ${!flagsLoading && !checkFeature('isCustomerReturns') ? 'opacity-50 cursor-not-allowed' : ''}`}
+            >
+              <div className="flex items-center space-x-2">
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                <span>Customer Returns</span>
+              </div>
+            </button>
+            <button
+              onClick={() => setSelectedTab('flipkart-reconciliation-billing')}
+              className={`py-3 px-1 border-b-2 font-medium text-sm transition-all duration-200 ${
+                selectedTab === 'flipkart-reconciliation-billing'
+                  ? 'border-yellow-400 text-yellow-400'
+                  : 'border-transparent text-white hover:text-gray-100 hover:border-gray-500'
+              }`}
+            >
+              <div className="flex items-center space-x-2">
+                <FaMoneyBillWave className="w-4 h-4 text-yellow-400" />
+                <span>Billing & Revenue</span>
+              </div>
+            </button>
               </>
             )}
 
@@ -2252,6 +2303,67 @@ export default function ExtractSKU() {
                 <span>Snapdeal Inventory</span>
               </div>
             </button>
+            <button
+              onClick={() => setSelectedTab('snapdeal-cancelled-orders')}
+              disabled={!flagsLoading && !checkFeature('isCancelledOrders')}
+              className={`py-3 px-1 border-b-2 font-medium text-sm transition-all duration-200 ${
+                selectedTab === 'snapdeal-cancelled-orders'
+                  ? 'border-red-400 text-red-400'
+                  : 'border-transparent text-white hover:text-gray-100 hover:border-gray-500'
+              } ${!flagsLoading && !checkFeature('isCancelledOrders') ? 'opacity-50 cursor-not-allowed' : ''}`}
+            >
+              <div className="flex items-center space-x-2">
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+                <span>Cancelled Orders</span>
+              </div>
+            </button>
+            <button
+              onClick={() => setSelectedTab('snapdeal-returns')}
+              disabled={!flagsLoading && !checkFeature('isReturns')}
+              className={`py-3 px-1 border-b-2 font-medium text-sm transition-all duration-200 ${
+                selectedTab === 'snapdeal-returns'
+                  ? 'border-red-400 text-red-400'
+                  : 'border-transparent text-white hover:text-gray-100 hover:border-gray-500'
+              } ${!flagsLoading && !checkFeature('isReturns') ? 'opacity-50 cursor-not-allowed' : ''}`}
+            >
+              <div className="flex items-center space-x-2">
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+                </svg>
+                <span>Returns</span>
+              </div>
+            </button>
+            <button
+              onClick={() => setSelectedTab('snapdeal-customer-returns')}
+              disabled={!flagsLoading && !checkFeature('isCustomerReturns')}
+              className={`py-3 px-1 border-b-2 font-medium text-sm transition-all duration-200 ${
+                selectedTab === 'snapdeal-customer-returns'
+                  ? 'border-red-400 text-red-400'
+                  : 'border-transparent text-white hover:text-gray-100 hover:border-gray-500'
+              } ${!flagsLoading && !checkFeature('isCustomerReturns') ? 'opacity-50 cursor-not-allowed' : ''}`}
+            >
+              <div className="flex items-center space-x-2">
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                <span>Customer Returns</span>
+              </div>
+            </button>
+            <button
+              onClick={() => setSelectedTab('snapdeal-reconciliation-billing')}
+              className={`py-3 px-1 border-b-2 font-medium text-sm transition-all duration-200 ${
+                selectedTab === 'snapdeal-reconciliation-billing'
+                  ? 'border-emerald-400 text-emerald-400'
+                  : 'border-transparent text-white hover:text-gray-100 hover:border-gray-500'
+              }`}
+            >
+              <div className="flex items-center space-x-2">
+                <FaMoneyBillWave className="w-4 h-4 text-emerald-400" />
+                <span>Billing & Revenue</span>
+              </div>
+            </button>
               </>
             )}
 
@@ -2269,6 +2381,51 @@ export default function ExtractSKU() {
               <div className="flex items-center space-x-2">
                 <FaBoxOpen className={`w-4 h-4 ${selectedTab === 'myntra-inventory' ? 'text-pink-400' : 'text-gray-400'}`} />
                 <span>Myntra Inventory</span>
+              </div>
+            </button>
+            <button
+              onClick={() => setSelectedTab('myntra-returns')}
+              disabled={!flagsLoading && !checkFeature('isReturns')}
+              className={`py-3 px-1 border-b-2 font-medium text-sm transition-all duration-200 ${
+                selectedTab === 'myntra-returns'
+                  ? 'border-pink-400 text-pink-400'
+                  : 'border-transparent text-white hover:text-gray-100 hover:border-gray-500'
+              } ${!flagsLoading && !checkFeature('isReturns') ? 'opacity-50 cursor-not-allowed' : ''}`}
+            >
+              <div className="flex items-center space-x-2">
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+                </svg>
+                <span>Returns</span>
+              </div>
+            </button>
+            <button
+              onClick={() => setSelectedTab('myntra-customer-returns')}
+              disabled={!flagsLoading && !checkFeature('isCustomerReturns')}
+              className={`py-3 px-1 border-b-2 font-medium text-sm transition-all duration-200 ${
+                selectedTab === 'myntra-customer-returns'
+                  ? 'border-pink-400 text-pink-400'
+                  : 'border-transparent text-white hover:text-gray-100 hover:border-gray-500'
+              } ${!flagsLoading && !checkFeature('isCustomerReturns') ? 'opacity-50 cursor-not-allowed' : ''}`}
+            >
+              <div className="flex items-center space-x-2">
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                <span>Customer Returns</span>
+              </div>
+            </button>
+            <button
+              onClick={() => setSelectedTab('myntra-reconciliation-billing')}
+              className={`py-3 px-1 border-b-2 font-medium text-sm transition-all duration-200 ${
+                selectedTab === 'myntra-reconciliation-billing'
+                  ? 'border-pink-400 text-pink-400'
+                  : 'border-transparent text-white hover:text-gray-100 hover:border-gray-500'
+              }`}
+            >
+              <div className="flex items-center space-x-2">
+                <FaMoneyBillWave className="w-4 h-4 text-pink-400" />
+                <span>Billing & Revenue</span>
               </div>
             </button>
               </>
@@ -3032,6 +3189,175 @@ export default function ExtractSKU() {
 
         {selectedTab === 'reconciliation-billing' && (
           <ReconciliationBilling
+            onNavigateToMasterSku={(options = {}) => {
+              setSelectedTab('master-sku');
+              setMainTab('sku_management');
+              const params = new URLSearchParams();
+              params.set('tab', 'master-sku');
+              if (options.search) params.set('search', options.search);
+              router.push(`/extract-sku?${params.toString()}`, undefined, { shallow: true });
+            }}
+            onNavigateToOrigin={(targetOrigin, options = {}) => {
+              setSelectedTab('master-rate');
+              setMainTab('sku_management');
+              const params = new URLSearchParams();
+              params.set('tab', 'master-rate');
+              params.set('search', targetOrigin);
+              if (options.autoAdd) {
+                params.set('addOrigin', targetOrigin);
+                if (options.size) params.set('size', options.size);
+              }
+              router.push(`/extract-sku?${params.toString()}`, undefined, { shallow: true });
+            }}
+          />
+        )}
+
+        {selectedTab === 'snapdeal-cancelled-orders' && (
+          !checkFeature('isCancelledOrders') ? (
+            <div className="p-4">
+              <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6 text-center">
+                <h2 className="text-xl font-semibold text-yellow-800 mb-2">Feature Not Available</h2>
+                <p className="text-yellow-700">Cancelled Orders feature is not enabled for your company. Please contact your administrator.</p>
+              </div>
+            </div>
+          ) : (
+            <CancelOrder platform="snapdeal" title="Snapdeal Cancelled Orders" />
+          )
+        )}
+
+        {selectedTab === 'snapdeal-returns' && (
+          !checkFeature('isReturns') ? (
+            <div className="p-4">
+              <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6 text-center">
+                <h2 className="text-xl font-semibold text-yellow-800 mb-2">Feature Not Available</h2>
+                <p className="text-yellow-700">Returns feature is not enabled for your company. Please contact your administrator.</p>
+              </div>
+            </div>
+          ) : (
+            <CancelOrder apiPath="returns" title="Snapdeal Returns" platform="snapdeal" />
+          )
+        )}
+
+        {selectedTab === 'snapdeal-customer-returns' && (
+          !checkFeature('isCustomerReturns') ? (
+            <div className="p-4">
+              <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6 text-center">
+                <h2 className="text-xl font-semibold text-yellow-800 mb-2">Feature Not Available</h2>
+                <p className="text-yellow-700">Customer Returns feature is not enabled for your company. Please contact your administrator.</p>
+              </div>
+            </div>
+          ) : (
+            <CancelOrder apiPath="customer-returns" title="Snapdeal Customer Returns" platform="snapdeal" />
+          )
+        )}
+
+        {selectedTab === 'snapdeal-reconciliation-billing' && (
+          <ReconciliationBilling
+            platform="snapdeal"
+            onNavigateToMasterSku={(options = {}) => {
+              setSelectedTab('master-sku');
+              setMainTab('sku_management');
+              const params = new URLSearchParams();
+              params.set('tab', 'master-sku');
+              if (options.search) params.set('search', options.search);
+              router.push(`/extract-sku?${params.toString()}`, undefined, { shallow: true });
+            }}
+            onNavigateToOrigin={(targetOrigin, options = {}) => {
+              setSelectedTab('master-rate');
+              setMainTab('sku_management');
+              const params = new URLSearchParams();
+              params.set('tab', 'master-rate');
+              params.set('search', targetOrigin);
+              if (options.autoAdd) {
+                params.set('addOrigin', targetOrigin);
+                if (options.size) params.set('size', options.size);
+              }
+              router.push(`/extract-sku?${params.toString()}`, undefined, { shallow: true });
+            }}
+          />
+        )}
+
+        {selectedTab === 'flipkart-returns' && (
+          !checkFeature('isReturns') ? (
+            <div className="p-4">
+              <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6 text-center">
+                <h2 className="text-xl font-semibold text-yellow-800 mb-2">Feature Not Available</h2>
+                <p className="text-yellow-700">Returns feature is not enabled for your company. Please contact your administrator.</p>
+              </div>
+            </div>
+          ) : (
+            <CancelOrder apiPath="returns" title="Flipkart Returns" platform="flipkart" />
+          )
+        )}
+
+        {selectedTab === 'flipkart-customer-returns' && (
+          !checkFeature('isCustomerReturns') ? (
+            <div className="p-4">
+              <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6 text-center">
+                <h2 className="text-xl font-semibold text-yellow-800 mb-2">Feature Not Available</h2>
+                <p className="text-yellow-700">Customer Returns feature is not enabled for your company. Please contact your administrator.</p>
+              </div>
+            </div>
+          ) : (
+            <CancelOrder apiPath="customer-returns" title="Flipkart Customer Returns" platform="flipkart" />
+          )
+        )}
+
+        {selectedTab === 'flipkart-reconciliation-billing' && (
+          <ReconciliationBilling
+            platform="flipkart"
+            onNavigateToMasterSku={(options = {}) => {
+              setSelectedTab('master-sku');
+              setMainTab('sku_management');
+              const params = new URLSearchParams();
+              params.set('tab', 'master-sku');
+              if (options.search) params.set('search', options.search);
+              router.push(`/extract-sku?${params.toString()}`, undefined, { shallow: true });
+            }}
+            onNavigateToOrigin={(targetOrigin, options = {}) => {
+              setSelectedTab('master-rate');
+              setMainTab('sku_management');
+              const params = new URLSearchParams();
+              params.set('tab', 'master-rate');
+              params.set('search', targetOrigin);
+              if (options.autoAdd) {
+                params.set('addOrigin', targetOrigin);
+                if (options.size) params.set('size', options.size);
+              }
+              router.push(`/extract-sku?${params.toString()}`, undefined, { shallow: true });
+            }}
+          />
+        )}
+
+        {selectedTab === 'myntra-returns' && (
+          !checkFeature('isReturns') ? (
+            <div className="p-4">
+              <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6 text-center">
+                <h2 className="text-xl font-semibold text-yellow-800 mb-2">Feature Not Available</h2>
+                <p className="text-yellow-700">Returns feature is not enabled for your company. Please contact your administrator.</p>
+              </div>
+            </div>
+          ) : (
+            <CancelOrder apiPath="returns" title="Myntra Returns" platform="myntra" />
+          )
+        )}
+
+        {selectedTab === 'myntra-customer-returns' && (
+          !checkFeature('isCustomerReturns') ? (
+            <div className="p-4">
+              <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6 text-center">
+                <h2 className="text-xl font-semibold text-yellow-800 mb-2">Feature Not Available</h2>
+                <p className="text-yellow-700">Customer Returns feature is not enabled for your company. Please contact your administrator.</p>
+              </div>
+            </div>
+          ) : (
+            <CancelOrder apiPath="customer-returns" title="Myntra Customer Returns" platform="myntra" />
+          )
+        )}
+
+        {selectedTab === 'myntra-reconciliation-billing' && (
+          <ReconciliationBilling
+            platform="myntra"
             onNavigateToMasterSku={(options = {}) => {
               setSelectedTab('master-sku');
               setMainTab('sku_management');

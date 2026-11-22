@@ -3,7 +3,16 @@ import SkuInventory from '../../models/SkuInventory';
 import Company from '../../models/company';
 import { USER_ROLES } from '../../lib/constants';
 import connectToDatabase from '../../lib/mongodb';
-import { getCompanyMappingInfo, resolveCompanyName, buildCompanyQueryFilter, getAssignedCompaniesForUser } from '../../lib/companyMappingHelper';
+import {
+    getCompanyMappingInfo,
+    resolveCompanyName,
+    buildCompanyQueryFilter,
+    getAssignedCompaniesForUser,
+    buildIgnoredCompanyDbFilter,
+    isGenuineCompanyName,
+    NON_GENUINE_COMPANY_REGEX,
+    DEFAULT_IGNORED_COMPANIES
+} from '../../lib/companyMappingHelper';
 
 async function handler(req, res) {
     await connectToDatabase();
@@ -31,6 +40,20 @@ async function handler(req, res) {
         try {
             const { platform } = req.query;
 
+            // Soft-delete any corrupted non-company records or false snapdeal companies
+            await SkuInventory.updateMany(
+                {
+                    company: user.company,
+                    isDeleted: false,
+                    $or: [
+                        { companyName: NON_GENUINE_COMPANY_REGEX },
+                        { companyName: { $in: [...DEFAULT_IGNORED_COMPANIES] } },
+                        { platform: 'snapdeal', companyName: { $in: ['SHREEJI', 'JAY KHODAL CREATION', 'TOTAL', 'SHREEJI#', 'shreeji new'] } }
+                    ]
+                },
+                { $set: { isDeleted: true } }
+            ).catch(err => console.error('Error soft-deleting corrupted SkuInventory records in filters:', err));
+
             const query = {
                 company: user.company,
                 isDeleted: false
@@ -52,9 +75,8 @@ async function handler(req, res) {
             const companyFilter = buildCompanyQueryFilter({ user, requestedCompanies: [], aliasMap });
             if (companyFilter) {
                 query.companyName = companyFilter;
-            } else if (ignoredSet.size > 0) {
-                const ignoredRegexList = [...ignoredSet].map(c => new RegExp(`^${c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'));
-                query.companyName = { $nin: ignoredRegexList };
+            } else {
+                query.companyName = buildIgnoredCompanyDbFilter(ignoredSet);
             }
 
             // Get unique dates
@@ -67,8 +89,11 @@ async function handler(req, res) {
             companyNames.forEach(name => {
                 if (name && typeof name === 'string' && name.trim()) {
                     const clean = name.trim();
-                    if (!ignoredSet.has(clean.toUpperCase())) {
-                        canonicalNamesSet.add(resolveCompanyName(clean, aliasMap));
+                    if (isGenuineCompanyName(clean) && !ignoredSet.has(clean.toUpperCase())) {
+                        const canon = resolveCompanyName(clean, aliasMap);
+                        if (isGenuineCompanyName(canon) && !ignoredSet.has(canon.toUpperCase())) {
+                            canonicalNamesSet.add(canon);
+                        }
                     }
                 }
             });
@@ -85,7 +110,7 @@ async function handler(req, res) {
                 } else {
                     const assignedUpperSet = new Set(assigned.map(c => c.toUpperCase()));
                     trimmedCompanyNames = Array.from(assignedUpperSet)
-                        .filter(c => !ignoredSet.has(c))
+                        .filter(c => isGenuineCompanyName(c) && !ignoredSet.has(c))
                         .sort((a, b) => a.localeCompare(b));
                 }
             }

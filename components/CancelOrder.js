@@ -1,11 +1,13 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import * as XLSX from 'xlsx';
 import Calendar from 'react-calendar';
 import 'react-calendar/dist/Calendar.css';
+import { isUnifiedReturnsFile, parseUnifiedReturnsRows } from '../lib/unifiedReturnsParser';
 
-export default function CancelOrder({ apiPath = 'cancelled-orders', title = 'Cancelled Orders' }) {
+export default function CancelOrder({ apiPath = 'cancelled-orders', title = 'Cancelled Orders', platform = 'meesho' }) {
   const apiBase = `/api/${apiPath}`;
+  const isReturnsTab = apiPath === 'returns' || apiPath === 'customer-returns';
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(false);
@@ -50,6 +52,7 @@ export default function CancelOrder({ apiPath = 'cancelled-orders', title = 'Can
   const [emailMappings, setEmailMappings] = useState([]);
   const [unmappedEmails, setUnmappedEmails] = useState(new Set());
   const [editingMapping, setEditingMapping] = useState(null);
+  const [unifiedSummary, setUnifiedSummary] = useState(null);
   const [newCompanyName, setNewCompanyName] = useState('');
   const [newEmail, setNewEmail] = useState('');
   const [deleteDate, setDeleteDate] = useState('');
@@ -60,7 +63,7 @@ export default function CancelOrder({ apiPath = 'cancelled-orders', title = 'Can
     fetchEmailMappings();
     fetchCustomOrder();
     fetchUploadedDates();
-  }, []);
+  }, [platform]);
 
   // Fetch data when filters change
   useEffect(() => {
@@ -71,7 +74,7 @@ export default function CancelOrder({ apiPath = 'cancelled-orders', title = 'Can
       }, 300);
       return () => clearTimeout(timer);
     }
-  }, [filterStartDate, filterEndDate, filterCompany, filterSKU]);
+  }, [filterStartDate, filterEndDate, filterCompany, filterSKU, platform]);
 
   const initializeView = () => {
     const today = new Date();
@@ -121,7 +124,7 @@ export default function CancelOrder({ apiPath = 'cancelled-orders', title = 'Can
     try {
       const token = localStorage.getItem('token');
       // Fetch all dates by using a wide range
-      const { data } = await axios.get(`${apiBase}?startDate=2020-01-01&endDate=2099-12-31`, {
+      const { data } = await axios.get(`${apiBase}?startDate=2020-01-01&endDate=2099-12-31&platform=${platform}`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       
@@ -174,6 +177,7 @@ export default function CancelOrder({ apiPath = 'cancelled-orders', title = 'Can
       if (filterEndDate) params.append('endDate', filterEndDate);
       if (filterCompany) params.append('companyName', filterCompany);
       if (filterSKU) params.append('sku', filterSKU);
+      params.append('platform', platform);
 
       const { data } = await axios.get(`${apiBase}?${params.toString()}`, {
         headers: { Authorization: `Bearer ${token}` }
@@ -414,6 +418,81 @@ export default function CancelOrder({ apiPath = 'cancelled-orders', title = 'Can
       if (data.length === 0) throw new Error('Excel file is empty');
 
       const firstRow = data[0];
+
+      // Check for Unified Order Report (Only for Returns and Customer Returns tabs)
+      if (isReturnsTab && isUnifiedReturnsFile(firstRow)) {
+        setUploadProgress({ percent: 45, message: 'Detected Unified Order Report. Classifying returns across Meesho & Snapdeal...' });
+
+        const parsed = parseUnifiedReturnsRows(data, {
+          emailMappings,
+          defaultDate: uploadDate,
+          useSelectedDateOnly: true
+        });
+
+        if (parsed.unmapped && parsed.unmapped.length > 0) {
+          const unmappedSet = new Set(parsed.unmapped.map(u => u.email));
+          setUnmappedEmails(unmappedSet);
+          setUploadProgress({ percent: 60, message: 'Mapping required...' });
+          setError(`Found ${unmappedSet.size} unmapped email(s)/store(s). Please map them to companies.`);
+          setShowMappingModal(true);
+          setLoading(false);
+          return;
+        }
+
+        const targetDate = uploadDate; // strictly prioritize user selected calendar date (Option 2)
+        setUploadProgress({ percent: 75, message: `Saving ${parsed.counts.total} returns across Meesho & Snapdeal for ${targetDate}...` });
+
+        const token = localStorage.getItem('token');
+        const { data: uploadRes } = await axios.post('/api/unified-returns-upload', {
+          date: targetDate,
+          meeshoReturns: parsed.meeshoReturns,
+          meeshoCustomerReturns: parsed.meeshoCustomerReturns,
+          snapdealReturns: parsed.snapdealReturns,
+          snapdealCustomerReturns: parsed.snapdealCustomerReturns,
+          flipkartReturns: parsed.flipkartReturns,
+          flipkartCustomerReturns: parsed.flipkartCustomerReturns,
+          myntraReturns: parsed.myntraReturns,
+          myntraCustomerReturns: parsed.myntraCustomerReturns
+        }, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+
+        // Mark holiday if selected
+        if (markAsHoliday) {
+          try {
+            await axios.post('/api/sku-inventory/holidays', {
+              date: targetDate,
+              isHoliday: true
+            }, {
+              headers: { Authorization: `Bearer ${token}` }
+            });
+            setHolidays(prev => new Set([...prev, targetDate]));
+          } catch (holidayErr) {
+            console.error('Error marking holiday:', holidayErr);
+          }
+        }
+
+        setUploadProgress({ percent: 100, message: 'Upload complete!' });
+        setError(null);
+        setSuccess(true);
+        setStatus(`Successfully uploaded ${uploadRes.counts?.total || parsed.counts.total} returns across Meesho & Snapdeal for ${targetDate}`);
+        setSelectedFile(null);
+        setShowUploadModal(false);
+        setLoading(false);
+        setUnifiedSummary({
+          message: uploadRes.message,
+          counts: uploadRes.counts,
+          duplicatesSkipped: parsed.duplicatesSkipped,
+          date: targetDate
+        });
+
+        await fetchUploadedDates();
+        if (filterStartDate && targetDate < filterStartDate) setFilterStartDate(targetDate);
+        if (filterEndDate && targetDate > filterEndDate) setFilterEndDate(targetDate);
+        await fetchCancelledOrders();
+        await fetchHolidays();
+        return;
+      }
       let styleIdKey = findHeaderKeyFromAlternatives(firstRow, ['Style Id', 'Style ID', 'SKU', 'Item', 'Product Code', 'Product', 'StyleId']);
       let quantityKey = findHeaderKeyFromAlternatives(firstRow, ['Quantity', 'Qty', 'Qty.', 'Count', 'Units', 'Return Qty']);
       let companyKey = findHeaderKeyFromAlternatives(firstRow, ['Company', 'Company Name', 'Seller', 'Vendor', 'Seller Name', 'CompanyName']);
@@ -519,7 +598,7 @@ export default function CancelOrder({ apiPath = 'cancelled-orders', title = 'Can
       }));
 
       const { data } = await axios.post(apiBase, 
-        { orders, startDate: uploadDate },
+        { orders, startDate: uploadDate, platform },
         { headers: { Authorization: `Bearer ${token}` } }
       );
 
@@ -628,7 +707,7 @@ export default function CancelOrder({ apiPath = 'cancelled-orders', title = 'Can
     try {
       setLoading(true);
       const token = localStorage.getItem('token');
-      const { data } = await axios.delete(`${apiBase}?date=${deleteDate}`, {
+      const { data } = await axios.delete(`${apiBase}?date=${deleteDate}&platform=${platform}`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       
@@ -727,6 +806,76 @@ export default function CancelOrder({ apiPath = 'cancelled-orders', title = 'Can
           <div className="flex">
             <div className="flex-shrink-0"><svg className="h-5 w-5 text-green-400" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" /></svg></div>
             <div className="ml-3"><p className="text-sm text-green-700">{status}</p></div>
+          </div>
+        </div>
+      )}
+
+      {/* Unified Returns Summary Card */}
+      {unifiedSummary && (
+        <div className="m-4 mb-3 p-4 bg-gradient-to-r from-emerald-50 via-teal-50 to-blue-50 border-2 border-emerald-300 rounded-xl shadow-sm">
+          <div className="flex items-center justify-between pb-2 border-b border-emerald-200">
+            <div className="flex items-center gap-2">
+              <span className="text-xl">⚡</span>
+              <h4 className="font-bold text-emerald-900 text-base">
+                Unified Returns Upload Complete ({unifiedSummary.date})
+              </h4>
+            </div>
+            <button
+              onClick={() => setUnifiedSummary(null)}
+              className="text-emerald-700 hover:text-emerald-900 text-xs font-semibold px-2 py-1 rounded bg-white border border-emerald-200 hover:bg-emerald-100 transition-colors"
+            >
+              ✕ Dismiss
+            </button>
+          </div>
+          <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="bg-white p-3 rounded-lg border border-amber-200 shadow-xs">
+              <p className="text-xs text-amber-700 font-semibold uppercase tracking-wider">Meesho RTO Returns</p>
+              <p className="text-2xl font-black text-amber-800 mt-1">{unifiedSummary.counts?.meeshoReturns ?? 0}</p>
+            </div>
+            <div className="bg-white p-3 rounded-lg border border-purple-200 shadow-xs">
+              <p className="text-xs text-purple-700 font-semibold uppercase tracking-wider">Meesho Customer Returns</p>
+              <p className="text-2xl font-black text-purple-800 mt-1">{unifiedSummary.counts?.meeshoCustomerReturns ?? 0}</p>
+            </div>
+            <div className="bg-white p-3 rounded-lg border border-orange-200 shadow-xs">
+              <p className="text-xs text-orange-700 font-semibold uppercase tracking-wider">Snapdeal RTO Returns</p>
+              <p className="text-2xl font-black text-orange-800 mt-1">{unifiedSummary.counts?.snapdealReturns ?? 0}</p>
+            </div>
+            <div className="bg-white p-3 rounded-lg border border-indigo-200 shadow-xs">
+              <p className="text-xs text-indigo-700 font-semibold uppercase tracking-wider">Snapdeal Customer Returns</p>
+              <p className="text-2xl font-black text-indigo-800 mt-1">{unifiedSummary.counts?.snapdealCustomerReturns ?? 0}</p>
+            </div>
+            {((unifiedSummary.counts?.flipkartReturns ?? 0) > 0 || (unifiedSummary.counts?.flipkartCustomerReturns ?? 0) > 0) && (
+              <>
+                <div className="bg-white p-3 rounded-lg border border-blue-200 shadow-xs">
+                  <p className="text-xs text-blue-700 font-semibold uppercase tracking-wider">Flipkart RTO Returns</p>
+                  <p className="text-2xl font-black text-blue-800 mt-1">{unifiedSummary.counts?.flipkartReturns ?? 0}</p>
+                </div>
+                <div className="bg-white p-3 rounded-lg border border-cyan-200 shadow-xs">
+                  <p className="text-xs text-cyan-700 font-semibold uppercase tracking-wider">Flipkart Customer Returns</p>
+                  <p className="text-2xl font-black text-cyan-800 mt-1">{unifiedSummary.counts?.flipkartCustomerReturns ?? 0}</p>
+                </div>
+              </>
+            )}
+            {((unifiedSummary.counts?.myntraReturns ?? 0) > 0 || (unifiedSummary.counts?.myntraCustomerReturns ?? 0) > 0) && (
+              <>
+                <div className="bg-white p-3 rounded-lg border border-pink-200 shadow-xs">
+                  <p className="text-xs text-pink-700 font-semibold uppercase tracking-wider">Myntra RTO Returns</p>
+                  <p className="text-2xl font-black text-pink-800 mt-1">{unifiedSummary.counts?.myntraReturns ?? 0}</p>
+                </div>
+                <div className="bg-white p-3 rounded-lg border border-rose-200 shadow-xs">
+                  <p className="text-xs text-rose-700 font-semibold uppercase tracking-wider">Myntra Customer Returns</p>
+                  <p className="text-2xl font-black text-rose-800 mt-1">{unifiedSummary.counts?.myntraCustomerReturns ?? 0}</p>
+                </div>
+              </>
+            )}
+          </div>
+          <div className="mt-2.5 pt-2 border-t border-emerald-100 flex flex-wrap items-center justify-between text-xs text-emerald-800">
+            <span>Total Returns Saved: <strong className="text-emerald-950 font-bold">{unifiedSummary.counts?.total ?? 0} orders</strong></span>
+            {unifiedSummary.duplicatesSkipped > 0 && (
+              <span className="text-amber-800 font-medium bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                ✓ {unifiedSummary.duplicatesSkipped} duplicate barcode scans automatically filtered out
+              </span>
+            )}
           </div>
         </div>
       )}
@@ -1055,8 +1204,14 @@ export default function CancelOrder({ apiPath = 'cancelled-orders', title = 'Can
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Upload Excel <span className="text-red-500">*</span></label>
-                <input type="file" name="excel_file" accept=".xlsx,.xls" required className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100" />
+                <label className="block text-sm font-medium text-gray-700 mb-2">Upload Excel / CSV <span className="text-red-500">*</span></label>
+                <input type="file" name="excel_file" accept=".xlsx,.xls,.csv" required className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100" />
+                {isReturnsTab && (
+                  <p className="text-xs text-blue-600 mt-1.5 font-medium">
+                    ⚡ <strong>Unified Report Supported</strong>: You can upload individual Excel files OR the unified <strong>Order Report (CSV/Excel)</strong>. 
+                    Unified files are automatically split and saved into Meesho, Snapdeal, Flipkart &amp; Myntra Returns and Customer Returns!
+                  </p>
+                )}
               </div>
 
               {loading && uploadProgress.message && (
