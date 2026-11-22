@@ -182,7 +182,9 @@ async function handler(req, res) {
         company: user.company,
         isDeleted: false
       };
-      if (platform === 'meesho') {
+      if (platform === 'all' || platform === 'ALL') {
+        // all platforms: no platform filter
+      } else if (platform === 'meesho') {
         deleteQuery.platform = { $in: ['meesho', null, ''] };
       } else if (platform) {
         deleteQuery.platform = platform;
