@@ -162,7 +162,7 @@ async function handler(req, res) {
       ReturnOrder.find(returnMatch).select('companyName sku quantity startDate selectedDate -_id').lean(),
       CustomerReturnOrder.find(custReturnMatch).select('companyName sku quantity startDate selectedDate -_id').lean(),
       MasterSku.find({ company: companyId }).select('sku origin size -_id').lean(),
-      MasterRate.find({ company: companyId }).select('origin imageLink itemRate boxRate boxReturnRate size -_id').lean()
+      MasterRate.find({ company: companyId }).select('origin imageLink itemRate boxRate boxReturnRate size rateHistory -_id').lean()
     ]);
 
     // 3. Build in-memory lookup maps for instant O(1) resolution
@@ -181,13 +181,25 @@ async function handler(req, res) {
     for (const r of masterRateDocs) {
       const cleanOrigin = (r.origin || '').trim().toLowerCase();
       if (cleanOrigin) {
+        // Pre-parse and chronologically sort rateHistory entries (earliest to latest)
+        const parsedHistory = (Array.isArray(r.rateHistory) ? r.rateHistory : [])
+          .filter(h => h && h.effectiveFrom)
+          .map(h => ({
+            fromMs: new Date(h.effectiveFrom).setHours(0, 0, 0, 0),
+            itemRate: Number(h.itemRate) || 0,
+            boxRate: Number(h.boxRate) || 0,
+            boxReturnRate: Number(h.boxReturnRate) || 0
+          }))
+          .sort((a, b) => a.fromMs - b.fromMs);
+
         originToRateMap.set(cleanOrigin, {
           origin: r.origin,
           itemRate: Number(r.itemRate) || 0,
           boxRate: Number(r.boxRate) || 0,
           boxReturnRate: Number(r.boxReturnRate) || 0,
           imageLink: r.imageLink || '',
-          size: r.size || ''
+          size: r.size || '',
+          parsedHistory
         });
       }
     }
@@ -243,12 +255,38 @@ async function handler(req, res) {
 
       const rateDoc = originName ? originToRateMap.get(originName.toLowerCase()) : null;
 
-      // Always use the CURRENT active rate from MasterRate.
-      // When rates are updated, reconciliation billing should immediately reflect
-      // the new rates for all dates. rateHistory is retained for audit trail only.
       let itemRate = rateDoc?.itemRate || 0;
       let boxRate = rateDoc?.boxRate || 0;
       let boxReturnRate = rateDoc?.boxReturnRate || 0;
+
+      // Date-effective rate resolution:
+      // If the origin has a rateHistory, find the latest rate effective on or before orderDate.
+      if (rateDoc && rateDoc.parsedHistory && rateDoc.parsedHistory.length > 0 && orderDateStr) {
+        try {
+          const oDateMs = new Date(orderDateStr).setHours(12, 0, 0, 0);
+          if (!isNaN(oDateMs)) {
+            let matched = null;
+            // Iterate backwards (from newest to oldest) to find the latest effectiveFrom <= orderDate
+            for (let i = rateDoc.parsedHistory.length - 1; i >= 0; i--) {
+              if (rateDoc.parsedHistory[i].fromMs <= oDateMs) {
+                matched = rateDoc.parsedHistory[i];
+                break;
+              }
+            }
+            // If orderDate is earlier than all recorded effectiveFrom dates, use the earliest recorded rate
+            if (!matched) {
+              matched = rateDoc.parsedHistory[0];
+            }
+            if (matched) {
+              itemRate = matched.itemRate;
+              boxRate = matched.boxRate;
+              boxReturnRate = matched.boxReturnRate;
+            }
+          }
+        } catch (e) {
+          // Fallback to active rate if invalid date
+        }
+      }
 
       // Formula:
       // Meesho inventory = rate + dabbi
