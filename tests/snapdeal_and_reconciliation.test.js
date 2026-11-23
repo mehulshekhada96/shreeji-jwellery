@@ -11,7 +11,8 @@ import {
 import {
   extractSnapdealSKU,
   extractSnapdealQuantity,
-  extractSnapdealCompany
+  extractSnapdealCompany,
+  extractSnapdealItems
 } from '../utils/snapdealInventoryParser.js';
 
 test('Suite 1: isGenuineCompanyName validation', async (t) => {
@@ -175,6 +176,18 @@ test('Suite 5: Snapdeal Company Extraction', async (t) => {
     assert.equal(comp, 'ZXRIZ');
   });
 
+  await t.test('normalizes CHINTAN LALLUBHAI DHANKECHA and ZXIRZ to canonical ZXRIZ', () => {
+    const lines = [
+      'SELLER ADDRESS',
+      'CHINTAN LALLUBHAI',
+      'DHANKECHA',
+      '5, NAVKAR BUSINESSPARK 2',
+      'SURAT - 394185'
+    ];
+    const comp = extractSnapdealCompany(lines, 'ZXIRZ GOLD RELIGIOUS PENDANT WITH CHAIN');
+    assert.equal(comp, 'ZXRIZ');
+  });
+
   await t.test('does NOT match buyer address containing Shreeji or Jay Khodal', () => {
     const lines = [
       'DELIVERY ADDRESS:',
@@ -231,4 +244,47 @@ test('Suite 7: Platform Query Isolation Logic', async (t) => {
     assert.deepEqual(meeshoQuery.platform, { $in: ['meesho', null, ''] });
   });
 });
+
+test('Suite 8: Multi-Item Snapdeal Page Extraction', async (t) => {
+  await t.test('extracts multiple distinct SKUs with individual quantities from single invoice', () => {
+    const lines = [
+      'ITEM DESCRIPTION QTY RATE TOTAL DISC TAXABLE VALUE IGST CESS',
+      'LAFORWORD GOLD RELIGIOUS PENDANT WITH CHAIN PACK OF 1',
+      'SKU CODE: VM_1055',
+      'COLOR GOLD , PACK PACK OF 1',
+      'ORDER NO.: 67879573194',
+      'SUBORDER NO.: 76538072665',
+      'HSN: 71171100',
+      '1 389.08 389.08 25 364.08 10.92 (3.00 %) 0.00 (0.00 %)',
+      'LAFORWORD GOLD RELIGIOUS PENDANT WITH CHAIN PACK OF 1',
+      'SKU CODE: EL_1130',
+      'COLOR GOLD , PACK PACK OF 1',
+      'ORDER NO.: 67879575643',
+      'SUBORDER NO.: 76538045315',
+      'HSN: 71171100',
+      '1 311.38 311.38 24 287.38 8.62 (3.00 %) 0.00 (0.00 %)'
+    ];
+    const items = extractSnapdealItems(lines, 'TOTAL ITEMS 2', 1);
+    assert.equal(items.length, 2);
+    assert.deepEqual(items[0], { sku: 'VM_1055', qty: 1 });
+    assert.deepEqual(items[1], { sku: 'EL_1130', qty: 1 });
+  });
+
+  await t.test('extracts single SKU with quantity > 1 from invoice row', () => {
+    const lines = [
+      'ITEM DESCRIPTION QTY RATE TOTAL DISC TAXABLE VALUE IGST CESS',
+      'ZXIRZ GOLD RELIGIOUS PENDANT WITH CHAIN PACK OF 1',
+      'SKU CODE: SVS_1232',
+      'COLOR GOLD , PACK PACK OF 1',
+      'ORDER NO.: 67904259575',
+      'SUBORDER NO.: 76564841630',
+      'HSN: 71171100',
+      '2 328.32 656.64 78 578.64 17.36 (3.00 %) 0.00 (0.00 %)'
+    ];
+    const items = extractSnapdealItems(lines, 'TOTAL ITEMS 2', 32);
+    assert.equal(items.length, 1);
+    assert.deepEqual(items[0], { sku: 'SVS_1232', qty: 2 });
+  });
+});
+
 

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { FaDatabase, FaCheckCircle, FaFileExcel, FaTimes, FaTrash } from 'react-icons/fa';
-import { isGenuineCompanyName } from '../lib/companyNameUtils';
+import { isGenuineCompanyName, normalizeCanonicalCompanyName } from '../lib/companyNameUtils';
 
 export default function SnapdealSort({
   allowed,
@@ -161,12 +161,12 @@ export default function SnapdealSort({
     return 1;
   }
 
-  function extractSnapdealCompany(lines) {
+  function extractSnapdealCompany(lines, pageText = '') {
     const cleanName = (name) => {
       if (!name) return null;
       let s = name.replace(/^[:|,\-\s]+|[:|,\-\s]+$/g, '').trim();
       if (!isGenuineCompanyName(s)) return null;
-      return s;
+      return normalizeCanonicalCompanyName(s);
     };
 
     // 1. Table row with SELLER and GSTIN:
@@ -227,6 +227,15 @@ export default function SnapdealSort({
           return candidate;
         }
       }
+    }
+
+    // 5. Fallback: Check pageText for canonical brand indicators
+    const fullTextUpper = (pageText || lines.join(' ')).toUpperCase();
+    if (/CHINTAN\s+LALLUBHAI|DHANKECHA|ZXRIZ|ZXIRZ/i.test(fullTextUpper)) {
+      return 'ZXRIZ';
+    }
+    if (/NORDIC\s+CREATION/i.test(fullTextUpper)) {
+      return 'NORDIC CREATION';
     }
 
     return 'Unknown Company';
@@ -321,7 +330,7 @@ export default function SnapdealSort({
 
         const sku = extractSnapdealSKU(lines, i, originMap);
         const qty = extractSnapdealQuantity(lines, pageText);
-        const company = extractSnapdealCompany(lines) || 'Zzzzz';
+        const company = extractSnapdealCompany(lines, pageText) || 'Zzzzz';
 
         // Pure invoice page has TAX INVOICE but does not have shipping label keywords
         const hasInvoice = /TAX\s+INVOICE/i.test(pageText);
