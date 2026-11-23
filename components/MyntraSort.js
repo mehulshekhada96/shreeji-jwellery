@@ -106,7 +106,40 @@ export default function MyntraSort({
 
         if (!isExcluded) {
           addItem(trimmed, false);
+          continue;
         }
+      }
+
+      // Pattern 3: Slash size format on Shipping Label: e.g. "db_46 / Onesize", "db_46 / Free Size", "db_46 / S"
+      const slashMatch = trimmed.match(/^([A-Za-z0-9_\.\-]+(?:\s+[A-Za-z0-9_\.\-]+)*)\s*\/\s*(?:Onesize|Free\s*Size|Free|FS|OS|XXXL|XXL|XL|XS|[SML]|[0-9]+(?:\s*(?:mm|cm|inch|in|m|kg|g|ml))?|[0-9]+)\s*(?:-\s*(\d+))?$/i);
+      if (slashMatch) {
+        const candidateSku = slashMatch[1].trim();
+        const isExcluded = /NORMAL|FWD|COD|PREPAID|MYNTRA|NULL|EK_E2E|DE_E2E|^[A-Z0-9]{2,4}\/[A-Z0-9]{2,4}$/i.test(trimmed);
+        if (!isExcluded && candidateSku.length >= 2 && candidateSku.length <= 40) {
+          const qty = slashMatch[2] ? parseInt(slashMatch[2], 10) : 1;
+          addItem(candidateSku + (qty > 1 ? ` - ${qty}` : ''), false);
+          continue;
+        }
+      }
+
+      // Pattern 4: Format on Tax Invoice: "LOODJWST112387849(db_46) - LAFORWORD..."
+      const invoiceItemMatch = trimmed.match(/[A-Za-z0-9]+\(([A-Za-z0-9_\.\-]+)\)\s*-\s*/);
+      if (invoiceItemMatch) {
+        const candidateSku = invoiceItemMatch[1].trim();
+        let qty = 1;
+        const lineIdx = lines.indexOf(line);
+        if (lineIdx !== -1) {
+          for (let k = lineIdx + 1; k < Math.min(lineIdx + 5, lines.length); k++) {
+            const rowLine = (lines[k] || '').trim();
+            const qtyMatch = rowLine.match(/^(\d+)\s+Rs\s+/i);
+            if (qtyMatch) {
+              qty = parseInt(qtyMatch[1], 10) || 1;
+              break;
+            }
+          }
+        }
+        addItem(candidateSku + (qty > 1 ? ` - ${qty}` : ''), false);
+        continue;
       }
     }
 
@@ -163,8 +196,7 @@ export default function MyntraSort({
       const pdf = await pdfjsLib.getDocument({ data: pdfArrayBuffer }).promise;
       const totalPages = pdf.numPages;
 
-      const pageData = [];
-
+      const allPages = [];
       for (let i = 1; i <= totalPages; i++) {
         setStatus(`Analyzing page ${i} of ${totalPages}...`);
         const page = await pdf.getPage(i);
@@ -172,22 +204,42 @@ export default function MyntraSort({
         const lines = reconstructLinesFromTextItems(textContent.items || []);
         
         const fullTextLower = lines.join(' ').toLowerCase();
-        const isMyntraLabel = fullTextLower.includes('declare that the goods') ||
-                              fullTextLower.includes('buyer declaration') ||
+        const isTaxInvoice = fullTextLower.includes('tax invoice') && !fullTextLower.includes('buyer declaration') && !fullTextLower.includes('seller details');
+        const isShippingLabel = fullTextLower.includes('buyer declaration') ||
                               fullTextLower.includes("buyer's name and address") ||
-                              fullTextLower.includes('purchase made') ||
-                              fullTextLower.includes('myntra') ||
-                              fullTextLower.includes('if undelivered');
+                              fullTextLower.includes('seller details') ||
+                              (fullTextLower.includes('if undelivered') && !isTaxInvoice) ||
+                              (!isTaxInvoice && (fullTextLower.includes('purchase made') || fullTextLower.includes('myntra')));
 
-        if (!isMyntraLabel) continue;
+        allPages.push({ pageNumber: i, textContent, lines, isTaxInvoice, isShippingLabel });
+      }
 
-        const items = parseMyntraItems(lines);
+      const pageData = [];
+
+      for (let idx = 0; idx < allPages.length; idx++) {
+        const curr = allPages[idx];
+        if (curr.isTaxInvoice && !curr.isShippingLabel) {
+          continue;
+        }
+
+        let invoicePageNumber = null;
+        let invoiceLines = [];
+        if (idx + 1 < allPages.length && allPages[idx + 1].isTaxInvoice && !allPages[idx + 1].isShippingLabel) {
+          invoicePageNumber = allPages[idx + 1].pageNumber;
+          invoiceLines = allPages[idx + 1].lines;
+          idx++;
+        }
+
+        let items = parseMyntraItems(curr.lines);
+        if (items.length === 0 && invoiceLines.length > 0) {
+          items = parseMyntraItems(invoiceLines);
+        }
 
         let skuX = null;
         let skuY = null;
         let purchaseMadeY = null;
-        if (textContent.items) {
-          for (const item of textContent.items) {
+        if (curr.textContent.items) {
+          for (const item of curr.textContent.items) {
             const str = (item.str || '').trim();
             if (!str) continue;
             const strLower = str.toLowerCase();
@@ -217,7 +269,7 @@ export default function MyntraSort({
         let isCombo = false;
 
         if (items.length > 0) {
-          totalQty = items.reduce((acc, curr) => acc + curr.qty, 0);
+          totalQty = items.reduce((acc, currItem) => acc + currItem.qty, 0);
           if (items.length === 1) {
             primarySku = items[0].sku;
             isCombo = items[0].qty > 1;
@@ -268,7 +320,8 @@ export default function MyntraSort({
         }
 
         pageData.push({
-          pageNumber: i,
+          pageNumber: curr.pageNumber,
+          invoicePageNumber,
           items,
           primarySku,
           totalQty: totalQty || 1,
