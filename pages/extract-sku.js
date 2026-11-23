@@ -16,6 +16,7 @@ import MasterRateManager from '../components/MasterRateManager';
 import ReconciliationBilling from '../components/ReconciliationBilling';
 import { useFeatureFlags } from '../utils/useFeatureFlags';
 import { parseSnapdealPDF } from '../utils/snapdealInventoryParser';
+import { normalizeCanonicalCompanyName } from '../lib/companyNameUtils';
 import { SiAmazon, SiFlipkart } from 'react-icons/si';
 import { FaShoppingBag, FaTag, FaBoxOpen, FaDatabase, FaCheckCircle, FaFileExcel, FaTimes, FaExternalLinkAlt, FaTrash, FaSync, FaMoneyBillWave } from 'react-icons/fa';
 import { toast } from 'react-toastify';
@@ -1726,28 +1727,61 @@ export default function ExtractSKU() {
 
       let fallbackMyntraCompanyName = null;
 
+      // First pass: extract text from all pages and detect labels vs tax invoices
+      const allPages = [];
       for (let i = 1; i <= totalPages; i++) {
-        const progress = 15 + Math.floor(((i / totalPages) * 75));
+        const progress = 15 + Math.floor(((i / totalPages) * 35));
         setUploadProgress({ 
           percent: progress, 
-          message: `Extracting data from page ${i} of ${totalPages}...` 
+          message: `Reading page ${i} of ${totalPages}...` 
         });
 
         const page = await pdf.getPage(i);
         const textContent = await page.getTextContent();
         const lines = reconstructLinesFromTextItems(textContent.items || []);
 
-        // Check if valid Myntra label
-        const isMyntraLabel = lines.some(line => {
-          const l = line.toLowerCase();
-          return l.includes('declare that the goods') || 
-                 l.includes('buyer declaration') ||
-                 l.includes('buyer\'s name and address') ||
-                 l.includes('purchase made') ||
-                 l.includes('myntra') ||
-                 l.includes('if undelivered');
+        const fullTextLower = lines.join(' ').toLowerCase();
+        const isTaxInvoice = fullTextLower.includes('tax invoice') && !fullTextLower.includes('buyer declaration') && !fullTextLower.includes('seller details');
+        const isShippingLabel = fullTextLower.includes('buyer declaration') ||
+                              fullTextLower.includes("buyer's name and address") ||
+                              fullTextLower.includes('seller details') ||
+                              (fullTextLower.includes('if undelivered') && !isTaxInvoice) ||
+                              (!isTaxInvoice && (fullTextLower.includes('purchase made') || fullTextLower.includes('myntra')));
+
+        allPages.push({ pageNumber: i, lines, isTaxInvoice, isShippingLabel });
+      }
+
+      const hasShippingLabels = allPages.some(p => p.isShippingLabel);
+
+      // Helper to extract clean SKU lookup string
+      const getCleanMyntraSku = (rawStr) => {
+        if (!rawStr) return '';
+        let str = String(rawStr).trim();
+        if (str.startsWith('[') && str.endsWith(']')) {
+          str = str.substring(1, str.length - 1).trim();
+        }
+        const match = str.match(/^(.*?)\s*-\s*([A-Za-z0-9]+)?$/);
+        if (match) {
+          return match[1].trim();
+        }
+        return str;
+      };
+
+      for (let idx = 0; idx < allPages.length; idx++) {
+        const { pageNumber, lines, isTaxInvoice, isShippingLabel } = allPages[idx];
+        const progress = 50 + Math.floor(((idx / allPages.length) * 45));
+        setUploadProgress({ 
+          percent: progress, 
+          message: `Extracting data from page ${pageNumber} of ${totalPages}...` 
         });
-        if (!isMyntraLabel) continue;
+
+        // In merged format (shipping labels + tax invoices), skip pure tax invoices to avoid double-counting
+        if (hasShippingLabels && isTaxInvoice && !isShippingLabel) {
+          continue;
+        }
+        if (!hasShippingLabels && !isTaxInvoice && !isShippingLabel) {
+          continue;
+        }
 
         // Extract company name
         let companyName = null;
@@ -1769,8 +1803,32 @@ export default function ExtractSKU() {
           }
         }
 
+        // Fallback for new merged Myntra format (e.g. Seller Details / GSTIN / Bill From)
+        if (!companyName) {
+          for (let j = 0; j < lines.length; j++) {
+            const line = lines[j].trim();
+            if (/seller\s+details/i.test(line)) {
+              const prev1 = lines[j - 1]?.trim() || '';
+              const prev2 = lines[j - 2]?.trim() || '';
+              if (/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/i.test(prev1)) {
+                companyName = prev2;
+              } else if (prev1 && !/buyer\s+declaration|resale/i.test(prev1)) {
+                companyName = prev1;
+              }
+              if (companyName) break;
+            }
+            if (/bill\s+from/i.test(line)) {
+              if (j + 1 < lines.length && lines[j + 1].trim()) {
+                companyName = lines[j + 1].trim();
+                break;
+              }
+            }
+          }
+        }
+
         if (companyName) {
-          fallbackMyntraCompanyName = companyName.toUpperCase();
+          companyName = normalizeCanonicalCompanyName(companyName.toUpperCase());
+          fallbackMyntraCompanyName = companyName;
         } else if (fallbackMyntraCompanyName) {
           companyName = fallbackMyntraCompanyName;
         } else {
@@ -1780,33 +1838,28 @@ export default function ExtractSKU() {
             "Myntra લેબલમાંથી કંપનીનું નામ મળ્યું નથી.\nકૃપા કરીને આ Myntra PDF માટે કંપનીનું નામ દાખલ કરો (દા.ત. VARNI_JEWELS):"
           );
           if (userCompany && userCompany.trim()) {
-            companyName = userCompany.trim().toUpperCase();
+            companyName = normalizeCanonicalCompanyName(userCompany.trim().toUpperCase());
             fallbackMyntraCompanyName = companyName;
           } else {
             throw new Error("કંપનીનું નામ દાખલ ન કરવાથી Myntra PDF અપલોડ રદ કરવામાં આવ્યું છે.");
           }
         }
 
-        // Helper to extract clean SKU lookup string
-        const getCleanMyntraSku = (rawStr) => {
-          if (!rawStr) return '';
-          let str = String(rawStr).trim();
-          if (str.startsWith('[') && str.endsWith(']')) {
-            str = str.substring(1, str.length - 1).trim();
-          }
-          const match = str.match(/^(.*?)\s*-\s*([A-Za-z0-9]+)?$/);
-          if (match) {
-            return match[1].trim();
-          }
-          return str;
-        };
-
         // Extract items
         const items = [];
         const seen = new Set();
 
-        const addItem = (rawText) => {
-          // Split combo SKUs separated by '+', ',', or '&'
+        const addItem = (cleanSku, qty = 1) => {
+          if (cleanSku && cleanSku.length >= 2) {
+            const key = `${cleanSku}_${qty}`;
+            if (!seen.has(key)) {
+              items.push({ sku: cleanSku, qty });
+              seen.add(key);
+            }
+          }
+        };
+
+        const parseComboText = (rawText) => {
           const parts = rawText.includes('+') ? rawText.split('+') 
                       : rawText.includes(',') ? rawText.split(',') 
                       : rawText.includes('&') ? rawText.split('&') 
@@ -1817,14 +1870,7 @@ export default function ExtractSKU() {
             let qty = 1;
             const match = part.match(/-\s*(\d+)$/);
             if (match) qty = parseInt(match[1], 10);
-
-            if (cleanSku && cleanSku.length >= 2) {
-              const key = `${cleanSku}_${qty}`;
-              if (!seen.has(key)) {
-                items.push({ sku: cleanSku, qty });
-                seen.add(key);
-              }
-            }
+            addItem(cleanSku, qty);
           }
         };
 
@@ -1838,7 +1884,7 @@ export default function ExtractSKU() {
             for (const match of bracketMatches) {
               const inside = match[1].trim();
               if (!inside.includes(')-(') && !inside.toLowerCase().includes('page')) {
-                addItem(inside);
+                parseComboText(inside);
               }
             }
             continue;
@@ -1859,8 +1905,42 @@ export default function ExtractSKU() {
               skuUpper.includes('DE_E2E');
 
             if (!isExcluded) {
-              addItem(trimmed);
+              const qty = unbracketedMatch[2] ? parseInt(unbracketedMatch[2], 10) : 1;
+              addItem(unbracketedMatch[1].trim(), qty);
+              continue;
             }
+          }
+
+          // Pattern 3: Slash size format on Shipping Label: e.g. "db_46 / Onesize", "db_46 / Free Size"
+          const slashMatch = trimmed.match(/^([A-Za-z0-9_\.\-]+(?:\s+[A-Za-z0-9_\.\-]+)*)\s*\/\s*(?:Onesize|Free\s*Size|Free|FS|OS|XXXL|XXL|XL|XS|[SML]|[0-9]+(?:\s*(?:mm|cm|inch|in|m|kg|g|ml))?|[0-9]+)\s*(?:-\s*(\d+))?$/i);
+          if (slashMatch) {
+            const candidateSku = slashMatch[1].trim();
+            const isExcluded = /NORMAL|FWD|COD|PREPAID|MYNTRA|NULL|EK_E2E|DE_E2E|^[A-Z0-9]{2,4}\/[A-Z0-9]{2,4}$/i.test(trimmed);
+            if (!isExcluded && candidateSku.length >= 2 && candidateSku.length <= 40) {
+              const qty = slashMatch[2] ? parseInt(slashMatch[2], 10) : 1;
+              addItem(candidateSku, qty);
+              continue;
+            }
+          }
+
+          // Pattern 4: Format on Tax Invoice: "LOODJWST112387849(db_46) - LAFORWORD..."
+          const invoiceItemMatch = trimmed.match(/[A-Za-z0-9]+\(([A-Za-z0-9_\.\-]+)\)\s*-\s*/);
+          if (invoiceItemMatch) {
+            const candidateSku = invoiceItemMatch[1].trim();
+            let qty = 1;
+            const lineIdx = lines.indexOf(line);
+            if (lineIdx !== -1) {
+              for (let k = lineIdx + 1; k < Math.min(lineIdx + 5, lines.length); k++) {
+                const rowLine = (lines[k] || '').trim();
+                const qtyMatch = rowLine.match(/^(\d+)\s+Rs\s+/i);
+                if (qtyMatch) {
+                  qty = parseInt(qtyMatch[1], 10) || 1;
+                  break;
+                }
+              }
+            }
+            addItem(candidateSku, qty);
+            continue;
           }
         }
 
