@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { FaDatabase, FaCheckCircle, FaFileExcel, FaTimes, FaTrash } from 'react-icons/fa';
-import { normalizeCanonicalCompanyName } from '../lib/companyNameUtils';
 
 export default function MyntraSort({
   allowed,
@@ -111,24 +110,14 @@ export default function MyntraSort({
         }
       }
 
-      // Pattern 3: Slash size format on Shipping Label: e.g. "db_46 / Onesize", "db_46 / Free Size", "qc_52 / Pack"
-      const slashMatch = trimmed.match(/^([A-Za-z0-9_\.\-]+(?:\s+[A-Za-z0-9_\.\-]+)*)\s*\/\s*([^-\n]+?)\s*(?:-\s*(\d+))?$/i);
+      // Pattern 3: Slash size format on Shipping Label: e.g. "db_46 / Onesize", "db_46 / Free Size", "db_46 / S"
+      const slashMatch = trimmed.match(/^([A-Za-z0-9_\.\-]+(?:\s+[A-Za-z0-9_\.\-]+)*)\s*\/\s*(?:Onesize|Free\s*Size|Free|FS|OS|XXXL|XXL|XL|XS|[SML]|[0-9]+(?:\s*(?:mm|cm|inch|in|m|kg|g|ml))?|[0-9]+)\s*(?:-\s*(\d+))?$/i);
       if (slashMatch) {
         const candidateSku = slashMatch[1].trim();
-        const sizePart = slashMatch[2].trim();
-        const isExcluded = 
-          /NORMAL|FWD|COD|PREPAID|MYNTRA|NULL|EK_E2E|DE_E2E|HTTP|\.COM|WWW|CONTACTUS|RS\./i.test(trimmed) ||
-          /^[A-Z0-9]{2,4}\/[A-Z0-9]{2,4}$/.test(trimmed) ||
-          /[,;:]/.test(trimmed) ||
-          candidateSku.length < 2 || candidateSku.length > 40 ||
-          sizePart.length < 1 || sizePart.length > 25 ||
-          /\b(?:COLONY|ROAD|NAGAR|SECTOR|STREET|HOUSE|VILLAGE|CITY|CAMPUS|PUR|MARKET|INDIA)\b/i.test(sizePart);
-
-        const validSizePattern = /^(?:Onesize|Free\s*Size|Free|FS|OS|Pack|Set|Pcs|Piece|Pair|Standard|XXXL|XXL|XL|XS|[SML]|[0-9]+(?:\s*(?:mm|cm|inch|in|m|kg|g|ml))?|[0-9]+)$/i;
-
-        if (!isExcluded && validSizePattern.test(sizePart)) {
-          // Consider single quantity for now as requested
-          addItem(candidateSku, false);
+        const isExcluded = /NORMAL|FWD|COD|PREPAID|MYNTRA|NULL|EK_E2E|DE_E2E|^[A-Z0-9]{2,4}\/[A-Z0-9]{2,4}$/i.test(trimmed);
+        if (!isExcluded && candidateSku.length >= 2 && candidateSku.length <= 40) {
+          const qty = slashMatch[2] ? parseInt(slashMatch[2], 10) : 1;
+          addItem(candidateSku + (qty > 1 ? ` - ${qty}` : ''), false);
           continue;
         }
       }
@@ -155,39 +144,6 @@ export default function MyntraSort({
     }
 
     return items;
-  }
-
-  function extractMyntraCompany(lines) {
-    if (!lines || lines.length === 0) return 'Unknown Company';
-    for (let j = 0; j < lines.length; j++) {
-      const line = lines[j];
-      if (/if undelivered.*return to/i.test(line) || /return to/i.test(line)) {
-        const colonIndex = line.indexOf(':');
-        if (colonIndex !== -1 && colonIndex < line.length - 1) {
-          const afterColon = line.substring(colonIndex + 1).trim();
-          if (afterColon && !/normal|fwd|buyer|declared/i.test(afterColon)) {
-            return normalizeCanonicalCompanyName(afterColon.split(',')[0].trim());
-          }
-        }
-        if (j + 1 < lines.length) {
-          const nextLine = lines[j + 1].trim();
-          if (nextLine && !/normal|fwd|buyer|declared/i.test(nextLine)) {
-            return normalizeCanonicalCompanyName(nextLine.split(',')[0].trim());
-          }
-        }
-      }
-    }
-    // Fallback: check lines for known seller names or GSTIN
-    for (let j = 0; j < lines.length; j++) {
-      const line = lines[j];
-      if (/ZXRIZ|ZXIRZ|CHINTAN\s+LALLUBHAI|24CPHPD1557F3Z6/i.test(line)) {
-        return 'ZXRIZ';
-      }
-      if (/COSMETIC\s*KING|24DBAPD3920E1ZE/i.test(line)) {
-        return 'Cosmetic King';
-      }
-    }
-    return 'Unknown Company';
   }
 
   const handleMyntraSubmit = async (event) => {
@@ -363,8 +319,6 @@ export default function MyntraSort({
           }
         }
 
-        const company = extractMyntraCompany(curr.lines);
-
         pageData.push({
           pageNumber: curr.pageNumber,
           invoicePageNumber,
@@ -373,7 +327,6 @@ export default function MyntraSort({
           totalQty: totalQty || 1,
           isCombo,
           originName,
-          company,
           skuX,
           skuY,
           purchaseMadeY,
@@ -431,10 +384,6 @@ export default function MyntraSort({
         const skuA = String(a.primarySku || '');
         const skuB = String(b.primarySku || '');
         if (skuA !== skuB) return skuA.localeCompare(skuB, undefined, { sensitivity: 'base' });
-
-        const companyA = String(a.company || '');
-        const companyB = String(b.company || '');
-        if (companyA !== companyB) return companyA.localeCompare(companyB, undefined, { sensitivity: 'base' });
 
         return a.totalQty - b.totalQty;
       });
