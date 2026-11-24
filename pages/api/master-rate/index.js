@@ -299,7 +299,14 @@ async function handler(req, res) {
               note: 'Prior rate before date-effective revision'
             });
           } else {
-            // Close any active or overlapping entries
+            // Remove any entries that start on or after effectiveDate (superseded by this update)
+            existing.rateHistory = existing.rateHistory.filter(entry => {
+              if (entry.effectiveFrom && new Date(entry.effectiveFrom) >= effectiveDate) {
+                return false;
+              }
+              return true;
+            });
+            // Close any active or overlapping prior entries
             for (const entry of existing.rateHistory) {
               if (!entry.effectiveTo || new Date(entry.effectiveTo) >= effectiveDate) {
                 entry.effectiveTo = dayBefore;
