@@ -30,8 +30,8 @@ export default function MyntraSort({
     if (str.startsWith('[') && str.endsWith(']')) {
       str = str.substring(1, str.length - 1).trim();
     }
-    const match = str.match(/^(.*?)\s*-\s*([A-Za-z0-9]+)?$/);
-    if (match) {
+    const match = str.match(/^(.*?)\s*-\s*(\d+)?$/);
+    if (match && (match[2] === undefined || /^\d+$/.test(match[2]))) {
       return match[1].trim();
     }
     return str;
@@ -44,92 +44,50 @@ export default function MyntraSort({
     return clean.replace(/_ZXRIZ/gi, '').trim().toLowerCase();
   }
 
-  // Parse Myntra SKU items from text lines
-  function parseMyntraItems(lines) {
+  // Parse Myntra SKU items from text lines and optional positional textContentItems
+  function parseMyntraItems(lines, isTaxInvoice = false, textContentItems = null) {
     const items = [];
     const seen = new Set();
 
-    const addItem = (rawText, isBracketed) => {
-      const parts = rawText.includes('+') ? rawText.split('+') 
-                  : rawText.includes(',') ? rawText.split(',') 
-                  : rawText.includes('&') ? rawText.split('&') 
-                  : [rawText];
+    const isAddressOrExcluded = (str) => {
+      if (!str) return true;
+      if (/\b(?:SURAT|GUJARAT|INDIA|DELHI|MUMBAI|MAHARASHTRA|RAJASTHAN|KERALA|ODISHA|BIHAR|PUNJAB|HARYANA|BENGAL|PRADESH|TAMIL|KARNATAKA|PLOT|PARK|STREET|ROAD|NAGAR|ASHRAM|SELLER|DETAILS|PPMP|RXMI|SUPPLY|NATURE|INVOICE|ORDER|PACKETID|CUSTOMER|BUYER|DECLARATION|RETURN|UNDELIVERED|PURCHASE|AMOUNT|DISCOUNT|TAXABLE|CGST|SGST|IGST|TOTAL|AUTHORIZED|SIGNATORY|CONTACTUS|CARE|APP|NORMAL|FWD|COD|PREPAID|MYNTRA|NULL|EK_E2E|DE_E2E|HSN|GSTIN|COSMETIC\s*KING|NORDIC\s*CREATION|VARNI\s*JEWELS|ZXRIZ|LAFORWORD|SHREEJI)\b/i.test(str)) {
+        return true;
+      }
+      if (/PPMP|RXMI/i.test(str)) return true;
+      if (str.includes(',') || /\b\d{5,6}\b/.test(str)) return true;
+      if (/^(?:ON|COD|PREPAID|NORMAL\s*-\s*Fwd)$/i.test(str)) return true;
+      if (/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/i.test(str)) return true; // GSTIN
+      return false;
+    };
 
-      for (const part of parts) {
-        const cleanSku = getCleanMyntraSku(part);
-        let qty = 1;
-        const match = part.match(/-\s*(\d+)$/);
-        if (match) qty = parseInt(match[1], 10);
-
-        if (cleanSku && cleanSku.length >= 2) {
-          const key = `${cleanSku}_${qty}`;
-          if (!seen.has(key)) {
-            items.push({ 
-              sku: cleanSku, 
-              displaySku: isBracketed ? cleanSku : part.trim(), 
-              searchStr: cleanSku, 
-              qty 
-            });
-            seen.add(key);
-          }
-        }
+    const addItem = (cleanSku, qty = 1, isBracketed = false, x = undefined, y = undefined) => {
+      if (!cleanSku || cleanSku.length < 2 || cleanSku.length > 40) return;
+      if (isAddressOrExcluded(cleanSku)) return;
+      if (qty > 50) return; // Strict safety rail against PIN codes
+      const key = `${cleanSku}_${qty}`;
+      if (!seen.has(key)) {
+        items.push({ 
+          sku: cleanSku, 
+          displaySku: cleanSku, 
+          searchStr: cleanSku, 
+          qty,
+          x,
+          y
+        });
+        seen.add(key);
       }
     };
 
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-
-      const bracketMatches = [...trimmed.matchAll(/\[\s*([A-Za-z0-9_\-\/\.\s\+&,]+?)\s*\]/g)];
-      if (bracketMatches.length > 0) {
-        for (const match of bracketMatches) {
-          const inside = match[1].trim();
-          if (!inside.includes(')-(') && !inside.toLowerCase().includes('page')) {
-            addItem(inside, true);
-          }
-        }
-        continue;
-      }
-
-      const unbracketedMatch = trimmed.match(/^([A-Za-z0-9_\.]{2,35}(?:\s+[A-Za-z0-9_\.]{2,35})?)\s*-\s*(\d+)?$/);
-      if (unbracketedMatch) {
-        const skuUpper = trimmed.toUpperCase();
-        const isExcluded = 
-          skuUpper.includes('NORMAL') ||
-          skuUpper.includes('FWD') ||
-          skuUpper.includes('COD') ||
-          skuUpper.includes('PREPAID') ||
-          skuUpper.includes('MYNTRA') ||
-          skuUpper.includes('NULL') ||
-          skuUpper.includes('EK_E2E') ||
-          skuUpper.includes('DE_E2E');
-
-        if (!isExcluded) {
-          addItem(trimmed, false);
-          continue;
-        }
-      }
-
-      // Pattern 3: Slash size format on Shipping Label: e.g. "db_46 / Onesize", "db_46 / Free Size", "db_46 / S"
-      const slashMatch = trimmed.match(/^([A-Za-z0-9_\.\-]+(?:\s+[A-Za-z0-9_\.\-]+)*)\s*\/\s*(?:Onesize|Free\s*Size|Free|FS|OS|XXXL|XXL|XL|XS|[SML]|[0-9]+(?:\s*(?:mm|cm|inch|in|m|kg|g|ml))?|[0-9]+)\s*(?:-\s*(\d+))?$/i);
-      if (slashMatch) {
-        const candidateSku = slashMatch[1].trim();
-        const isExcluded = /NORMAL|FWD|COD|PREPAID|MYNTRA|NULL|EK_E2E|DE_E2E|^[A-Z0-9]{2,4}\/[A-Z0-9]{2,4}$/i.test(trimmed);
-        if (!isExcluded && candidateSku.length >= 2 && candidateSku.length <= 40) {
-          const qty = slashMatch[2] ? parseInt(slashMatch[2], 10) : 1;
-          addItem(candidateSku + (qty > 1 ? ` - ${qty}` : ''), false);
-          continue;
-        }
-      }
-
-      // Pattern 4: Format on Tax Invoice: "LOODJWST112387849(db_46) - LAFORWORD..."
-      const invoiceItemMatch = trimmed.match(/[A-Za-z0-9]+\(([A-Za-z0-9_\.\-]+)\)\s*-\s*/);
-      if (invoiceItemMatch) {
-        const candidateSku = invoiceItemMatch[1].trim();
-        let qty = 1;
-        const lineIdx = lines.indexOf(line);
-        if (lineIdx !== -1) {
-          for (let k = lineIdx + 1; k < Math.min(lineIdx + 5, lines.length); k++) {
+    if (isTaxInvoice) {
+      // Tax Invoices: Legally structured product table
+      for (let i = 0; i < lines.length; i++) {
+        const trimmed = lines[i].trim();
+        const invoiceItemMatch = trimmed.match(/[A-Za-z0-9]+\(([A-Za-z0-9_\.\-\s]+)\)\s*-\s*/);
+        if (invoiceItemMatch) {
+          const candidateSku = invoiceItemMatch[1].trim();
+          let qty = 1;
+          for (let k = i + 1; k < Math.min(i + 5, lines.length); k++) {
             const rowLine = (lines[k] || '').trim();
             const qtyMatch = rowLine.match(/^(\d+)\s+Rs\s+/i);
             if (qtyMatch) {
@@ -137,9 +95,102 @@ export default function MyntraSort({
               break;
             }
           }
+          addItem(getCleanMyntraSku(candidateSku), qty, false);
         }
-        addItem(candidateSku + (qty > 1 ? ` - ${qty}` : ''), false);
-        continue;
+      }
+      return items;
+    }
+
+    // Shipping Label - Spatial extraction from SKU bounding box if coordinates are available (x < 150, 80 <= y <= 185)
+    if (textContentItems && textContentItems.length > 0) {
+      const boxItems = textContentItems.filter(item => {
+        const x = item.transform ? item.transform[4] : 0;
+        const y = item.transform ? item.transform[5] : 0;
+        return x < 150 && y >= 80 && y <= 185 && item.str.trim();
+      });
+
+      for (const item of boxItems) {
+        const trimmed = item.str.trim();
+        if (!trimmed || isAddressOrExcluded(trimmed)) continue;
+
+        const slashMatch = trimmed.match(/^([A-Za-z0-9_\.\-]+(?:\s+[A-Za-z0-9_\.\-]+)*)\s*\/\s*(?:Onesize|Free\s*Size|Free|FS|OS|Pack|Set|Pcs|Piece|Standard|XXXL|XXL|XL|XS|[SML]|[0-9]+(?:\s*(?:mm|cm|inch|in|m|kg|g|ml))?|[0-9]+)\s*(?:-\s*(\d+))?$/i);
+        if (slashMatch) {
+          const qty = slashMatch[2] ? parseInt(slashMatch[2], 10) : 1;
+          addItem(getCleanMyntraSku(slashMatch[1].trim()), qty, false, item.transform[4], item.transform[5]);
+          continue;
+        }
+
+        const hyphenMatch = trimmed.match(/^([A-Za-z0-9_\.]{2,35}(?:\s+[A-Za-z0-9_\.]{2,35})?)\s*-\s*([1-9]\d{0,1})?$/);
+        if (hyphenMatch) {
+          const qty = hyphenMatch[2] ? parseInt(hyphenMatch[2], 10) : 1;
+          addItem(getCleanMyntraSku(hyphenMatch[1].trim()), qty, false, item.transform[4], item.transform[5]);
+          continue;
+        }
+
+        const bareMatch = trimmed.match(/^([A-Za-z0-9_\.]{2,35}(?:\s+[A-Za-z0-9_\.]{1,35})?)$/);
+        if (bareMatch) {
+          addItem(getCleanMyntraSku(bareMatch[1].trim()), 1, false, item.transform[4], item.transform[5]);
+          continue;
+        }
+      }
+    }
+
+    // Contextual fallback: lines below Seller Details / PPMP / PRODUCT NAME QUANTITY
+    if (items.length === 0 && lines && lines.length > 0) {
+      const sellerIdx = lines.findIndex(l => /Seller Details|PPMP|PRODUCT NAME QUANTITY/i.test(l));
+      const candidateLines = sellerIdx !== -1 ? lines.slice(sellerIdx) : lines;
+
+      for (const line of candidateLines) {
+        const trimmed = line.trim();
+        if (!trimmed || isAddressOrExcluded(trimmed)) continue;
+
+        // Pattern 1: Bracketed format: e.g. [qc_53 - 1] or [qc_53, el_12]
+        const bracketMatches = [...trimmed.matchAll(/\[\s*([A-Za-z0-9_\-\/\.\s\+&,]+?)\s*\]/g)];
+        if (bracketMatches.length > 0) {
+          for (const match of bracketMatches) {
+            const inside = match[1].trim();
+            if (!inside.includes(')-(') && !inside.toLowerCase().includes('page')) {
+              const parts = inside.includes('+') ? inside.split('+') 
+                          : inside.includes(',') ? inside.split(',') 
+                          : inside.includes('&') ? inside.split('&') 
+                          : [inside];
+              for (const part of parts) {
+                let qty = 1;
+                const matchQty = part.match(/-\s*(\d+)$/);
+                if (matchQty) qty = parseInt(matchQty[1], 10) || 1;
+                const cleanSku = getCleanMyntraSku(part);
+                addItem(cleanSku, qty, true);
+              }
+            }
+          }
+          continue;
+        }
+
+        // Pattern 2: Slash size format: e.g. "db_46 / Onesize", "db_46 / Free Size", "qc_25 / Pack"
+        const slashMatch = trimmed.match(/^([A-Za-z0-9_\.\-]+(?:\s+[A-Za-z0-9_\.\-]+)*)\s*\/\s*(?:Onesize|Free\s*Size|Free|FS|OS|Pack|Set|Pcs|Piece|Standard|XXXL|XXL|XL|XS|[SML]|[0-9]+(?:\s*(?:mm|cm|inch|in|m|kg|g|ml))?|[0-9]+)\s*(?:-\s*(\d+))?$/i);
+        if (slashMatch) {
+          const candidateSku = slashMatch[1].trim();
+          const qty = slashMatch[2] ? parseInt(slashMatch[2], 10) : 1;
+          addItem(getCleanMyntraSku(candidateSku), qty, false);
+          continue;
+        }
+
+        // Pattern 3: Hyphenated format: e.g. "qc_53 -" or "el_1711 - 2" (max qty 50 to avoid pincodes)
+        const hyphenMatch = trimmed.match(/^([A-Za-z0-9_\.]{2,35}(?:\s+[A-Za-z0-9_\.]{2,35})?)\s*-\s*([1-9]\d{0,1})?$/);
+        if (hyphenMatch) {
+          const candidateSku = hyphenMatch[1].trim();
+          const qty = hyphenMatch[2] ? parseInt(hyphenMatch[2], 10) : 1;
+          addItem(getCleanMyntraSku(candidateSku), qty, false);
+          continue;
+        }
+
+        // Pattern 4: Bare SKU on Shipping Label: e.g. "jw_613_DC_ZXRIZ", "el_1006_ZXRIZ", "serena 1_ZXRIZ"
+        const bareMatch = trimmed.match(/^([A-Za-z0-9_\.]{2,35}(?:\s+[A-Za-z0-9_\.]{1,35})?)$/);
+        if (bareMatch) {
+          const candidateSku = bareMatch[1].trim();
+          addItem(getCleanMyntraSku(candidateSku), 1, false);
+          continue;
+        }
       }
     }
 
@@ -204,35 +255,46 @@ export default function MyntraSort({
         const lines = reconstructLinesFromTextItems(textContent.items || []);
         
         const fullTextLower = lines.join(' ').toLowerCase();
-        const isTaxInvoice = fullTextLower.includes('tax invoice') && !fullTextLower.includes('buyer declaration') && !fullTextLower.includes('seller details');
-        const isShippingLabel = fullTextLower.includes('buyer declaration') ||
-                              fullTextLower.includes("buyer's name and address") ||
-                              fullTextLower.includes('seller details') ||
-                              (fullTextLower.includes('if undelivered') && !isTaxInvoice) ||
-                              (!isTaxInvoice && (fullTextLower.includes('purchase made') || fullTextLower.includes('myntra')));
+        const hasInvoiceTable = fullTextLower.includes('invoice number') && (fullTextLower.includes('taxable') || fullTextLower.includes('igst') || fullTextLower.includes('cgst'));
+        const hasCourierSection = fullTextLower.includes('ek_e2e') || fullTextLower.includes('de_e2e') || fullTextLower.includes('delhivery') || fullTextLower.includes('buyer declaration') || fullTextLower.includes("buyer's name and address") || fullTextLower.includes('cash to be collected');
 
-        allPages.push({ pageNumber: i, textContent, lines, isTaxInvoice, isShippingLabel });
+        const isShippingLabel = hasCourierSection || (!hasInvoiceTable && (fullTextLower.includes('seller details') || fullTextLower.includes('if undelivered')));
+        const isPureTaxInvoice = hasInvoiceTable && !hasCourierSection;
+
+        allPages.push({ pageNumber: i, textContent, lines, isPureTaxInvoice, isShippingLabel });
       }
 
       const pageData = [];
 
       for (let idx = 0; idx < allPages.length; idx++) {
         const curr = allPages[idx];
-        if (curr.isTaxInvoice && !curr.isShippingLabel) {
+        if (curr.isPureTaxInvoice) {
           continue;
         }
 
         let invoicePageNumber = null;
         let invoiceLines = [];
-        if (idx + 1 < allPages.length && allPages[idx + 1].isTaxInvoice && !allPages[idx + 1].isShippingLabel) {
+        if (idx + 1 < allPages.length && allPages[idx + 1].isPureTaxInvoice) {
           invoicePageNumber = allPages[idx + 1].pageNumber;
           invoiceLines = allPages[idx + 1].lines;
           idx++;
         }
 
-        let items = parseMyntraItems(curr.lines);
-        if (items.length === 0 && invoiceLines.length > 0) {
-          items = parseMyntraItems(invoiceLines);
+        const invoiceItems = invoiceLines.length > 0 ? parseMyntraItems(invoiceLines, true) : [];
+        const labelItems = parseMyntraItems(curr.lines, false, curr.textContent?.items);
+
+        let items = [];
+        if (invoiceItems.length > 0) {
+          items = invoiceItems;
+          for (const invIt of items) {
+            const matchedLabel = labelItems.find(l => l.sku.toLowerCase() === invIt.sku.toLowerCase());
+            if (matchedLabel && matchedLabel.x !== undefined && matchedLabel.y !== undefined) {
+              invIt.x = matchedLabel.x;
+              invIt.y = matchedLabel.y;
+            }
+          }
+        } else {
+          items = labelItems;
         }
 
         let skuX = null;
