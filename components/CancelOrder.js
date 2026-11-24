@@ -4,6 +4,7 @@ import * as XLSX from 'xlsx';
 import Calendar from 'react-calendar';
 import 'react-calendar/dist/Calendar.css';
 import { isUnifiedReturnsFile, parseUnifiedReturnsRows, DEFAULT_RETURN_KEYWORDS } from '../lib/unifiedReturnsParser';
+import { isUnifiedCancelledFile, parseUnifiedCancelledRows } from '../lib/unifiedCancelledParser';
 
 export default function CancelOrder({ apiPath = 'cancelled-orders', title = 'Cancelled Orders', platform = 'meesho' }) {
   const apiBase = `/api/${apiPath}`;
@@ -546,6 +547,52 @@ export default function CancelOrder({ apiPath = 'cancelled-orders', title = 'Can
         // Do NOT save to database yet!
         const targetDate = uploadDate;
         setPendingUploadData({
+          isCancelled: false,
+          targetDate,
+          rawData: data,
+          markAsHoliday,
+          parsed
+        });
+        setUploadProgress({ percent: 100, message: 'Ready for confirmation!' });
+        setShowUploadModal(false);
+        setShowUploadConfirmModal(true);
+        setLoading(false);
+        return;
+      }
+
+      // Check for Unified Cancelled Orders Report (For Cancelled Orders tab)
+      if (!isReturnsTab && isUnifiedCancelledFile(firstRow)) {
+        setUploadProgress({ percent: 45, message: 'Detected Unified Order Report. Classifying cancelled orders across all portals...' });
+
+        const parsed = parseUnifiedCancelledRows(data, {
+          emailMappings,
+          defaultDate: uploadDate,
+          useSelectedDateOnly: true,
+          defaultPlatform: platform
+        });
+
+        // Step 1: Check for unmapped email/stores
+        if (parsed.unmapped && parsed.unmapped.length > 0) {
+          const unmappedSet = new Set(parsed.unmapped.map(u => u.email));
+          setUnmappedEmails(unmappedSet);
+          setPendingUploadData({
+            isCancelled: true,
+            targetDate: uploadDate,
+            rawData: data,
+            markAsHoliday,
+            parsed
+          });
+          setUploadProgress({ percent: 60, message: 'Mapping required...' });
+          setError(`Found ${unmappedSet.size} unmapped email(s)/store(s). Please map them to companies.`);
+          setShowMappingModal(true);
+          setLoading(false);
+          return;
+        }
+
+        // Step 2: All clear -> Show Pre-Upload Confirmation Modal
+        const targetDate = uploadDate;
+        setPendingUploadData({
+          isCancelled: true,
           targetDate,
           rawData: data,
           markAsHoliday,
@@ -779,22 +826,37 @@ export default function CancelOrder({ apiPath = 'cancelled-orders', title = 'Can
     if (!pendingUploadData || !pendingUploadData.parsed) return;
     try {
       setLoading(true);
-      const { targetDate, parsed, markAsHoliday: shouldMarkHoliday } = pendingUploadData;
+      const { targetDate, parsed, markAsHoliday: shouldMarkHoliday, isCancelled } = pendingUploadData;
       const token = localStorage.getItem('token');
 
-      const { data: uploadRes } = await axios.post('/api/unified-returns-upload', {
-        date: targetDate,
-        meeshoReturns: parsed.meeshoReturns,
-        meeshoCustomerReturns: parsed.meeshoCustomerReturns,
-        snapdealReturns: parsed.snapdealReturns,
-        snapdealCustomerReturns: parsed.snapdealCustomerReturns,
-        flipkartReturns: parsed.flipkartReturns,
-        flipkartCustomerReturns: parsed.flipkartCustomerReturns,
-        myntraReturns: parsed.myntraReturns,
-        myntraCustomerReturns: parsed.myntraCustomerReturns
-      }, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
+      let uploadRes;
+      if (isCancelled) {
+        const { data } = await axios.post('/api/unified-cancelled-upload', {
+          date: targetDate,
+          meeshoCancelled: parsed.meeshoCancelled,
+          snapdealCancelled: parsed.snapdealCancelled,
+          flipkartCancelled: parsed.flipkartCancelled,
+          myntraCancelled: parsed.myntraCancelled
+        }, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        uploadRes = data;
+      } else {
+        const { data } = await axios.post('/api/unified-returns-upload', {
+          date: targetDate,
+          meeshoReturns: parsed.meeshoReturns,
+          meeshoCustomerReturns: parsed.meeshoCustomerReturns,
+          snapdealReturns: parsed.snapdealReturns,
+          snapdealCustomerReturns: parsed.snapdealCustomerReturns,
+          flipkartReturns: parsed.flipkartReturns,
+          flipkartCustomerReturns: parsed.flipkartCustomerReturns,
+          myntraReturns: parsed.myntraReturns,
+          myntraCustomerReturns: parsed.myntraCustomerReturns
+        }, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        uploadRes = data;
+      }
 
       if (shouldMarkHoliday) {
         try {
@@ -813,11 +875,15 @@ export default function CancelOrder({ apiPath = 'cancelled-orders', title = 'Can
       setLoading(false);
       setError(null);
       setSuccess(true);
-      setStatus(`Successfully uploaded ${uploadRes.counts?.total || parsed.counts.total} returns across portals for ${targetDate}`);
+      setStatus(isCancelled
+        ? `Successfully uploaded ${uploadRes.counts?.total || parsed.counts.total} cancelled orders across portals for ${targetDate}`
+        : `Successfully uploaded ${uploadRes.counts?.total || parsed.counts.total} returns across portals for ${targetDate}`
+      );
       setSelectedFile(null);
       setShowUploadConfirmModal(false);
       setPendingUploadData(null);
       setUnifiedSummary({
+        isCancelled: Boolean(isCancelled),
         message: uploadRes.message,
         counts: uploadRes.counts,
         duplicatesSkipped: parsed.duplicatesSkipped,
@@ -832,7 +898,7 @@ export default function CancelOrder({ apiPath = 'cancelled-orders', title = 'Can
       setTimeout(() => { setSuccess(false); setStatus(''); }, 5000);
     } catch (err) {
       console.error('Unified upload confirm error:', err);
-      setError(err.response?.data?.message || 'Failed to save unified returns');
+      setError(err.response?.data?.message || 'Failed to save unified records');
       setLoading(false);
     }
   };
@@ -874,12 +940,22 @@ export default function CancelOrder({ apiPath = 'cancelled-orders', title = 'Can
       } else if (pendingUploadData && pendingUploadData.rawData) {
         const { data } = await axios.get('/api/company-email-mapping', { headers: { Authorization: `Bearer ${token}` } });
         const updatedMappings = data.mappings || [];
-        const reParsed = parseUnifiedReturnsRows(pendingUploadData.rawData, {
-          emailMappings: updatedMappings,
-          defaultDate: pendingUploadData.targetDate,
-          useSelectedDateOnly: true,
-          customKeywords: returnKeywords
-        });
+        let reParsed;
+        if (pendingUploadData.isCancelled) {
+          reParsed = parseUnifiedCancelledRows(pendingUploadData.rawData, {
+            emailMappings: updatedMappings,
+            defaultDate: pendingUploadData.targetDate,
+            useSelectedDateOnly: true,
+            defaultPlatform: platform
+          });
+        } else {
+          reParsed = parseUnifiedReturnsRows(pendingUploadData.rawData, {
+            emailMappings: updatedMappings,
+            defaultDate: pendingUploadData.targetDate,
+            useSelectedDateOnly: true,
+            customKeywords: returnKeywords
+          });
+        }
         if (reParsed.unmapped && reParsed.unmapped.length > 0) {
           const unmappedSet = new Set(reParsed.unmapped.map(u => u.email));
           setUnmappedEmails(unmappedSet);
@@ -925,17 +1001,29 @@ export default function CancelOrder({ apiPath = 'cancelled-orders', title = 'Can
       setLoading(true);
       const token = localStorage.getItem('token');
 
-      if (isReturnsTab && deleteScope === 'all') {
-        const { data } = await axios.delete('/api/unified-returns-delete', {
-          data: {
-            date: deleteDate,
-            allPlatforms: true,
-            deleteBoth: true
-          },
-          headers: { Authorization: `Bearer ${token}` }
-        });
-        setSuccess(true);
-        setStatus(data.message || `Deleted all portal return records for ${deleteDate}`);
+      if (deleteScope === 'all') {
+        if (isReturnsTab) {
+          const { data } = await axios.delete('/api/unified-returns-delete', {
+            data: {
+              date: deleteDate,
+              allPlatforms: true,
+              deleteBoth: true
+            },
+            headers: { Authorization: `Bearer ${token}` }
+          });
+          setSuccess(true);
+          setStatus(data.message || `Deleted all portal return records for ${deleteDate}`);
+        } else {
+          const { data } = await axios.delete('/api/unified-cancelled-delete', {
+            data: {
+              date: deleteDate,
+              allPlatforms: true
+            },
+            headers: { Authorization: `Bearer ${token}` }
+          });
+          setSuccess(true);
+          setStatus(data.message || `Deleted all portal cancelled records for ${deleteDate}`);
+        }
       } else {
         const { data } = await axios.delete(`${apiBase}?date=${deleteDate}&platform=${platform}`, {
           headers: { Authorization: `Bearer ${token}` }
@@ -1041,14 +1129,14 @@ export default function CancelOrder({ apiPath = 'cancelled-orders', title = 'Can
         </div>
       )}
 
-      {/* Unified Returns Summary Card */}
+      {/* Unified Summary Card */}
       {unifiedSummary && (
         <div className="m-4 mb-3 p-4 bg-gradient-to-r from-emerald-50 via-teal-50 to-blue-50 border-2 border-emerald-300 rounded-xl shadow-sm">
           <div className="flex items-center justify-between pb-2 border-b border-emerald-200">
             <div className="flex items-center gap-2">
               <span className="text-xl">⚡</span>
               <h4 className="font-bold text-emerald-900 text-base">
-                Unified Returns Upload Complete ({unifiedSummary.date})
+                {unifiedSummary.isCancelled ? 'Unified Cancelled Orders Upload Complete' : 'Unified Returns Upload Complete'} ({unifiedSummary.date})
               </h4>
             </div>
             <button
@@ -1058,50 +1146,74 @@ export default function CancelOrder({ apiPath = 'cancelled-orders', title = 'Can
               ✕ Dismiss
             </button>
           </div>
-          <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-3">
-            <div className="bg-white p-3 rounded-lg border border-amber-200 shadow-xs">
-              <p className="text-xs text-amber-700 font-semibold uppercase tracking-wider">Meesho RTO Returns</p>
-              <p className="text-2xl font-black text-amber-800 mt-1">{unifiedSummary.counts?.meeshoReturns ?? 0}</p>
+          {unifiedSummary.isCancelled ? (
+            <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div className="bg-white p-3 rounded-lg border border-amber-200 shadow-xs">
+                <p className="text-xs text-amber-700 font-semibold uppercase tracking-wider">Meesho Cancelled</p>
+                <p className="text-2xl font-black text-amber-800 mt-1">{unifiedSummary.counts?.meeshoCancelled ?? 0}</p>
+              </div>
+              <div className="bg-white p-3 rounded-lg border border-orange-200 shadow-xs">
+                <p className="text-xs text-orange-700 font-semibold uppercase tracking-wider">Snapdeal Cancelled</p>
+                <p className="text-2xl font-black text-orange-800 mt-1">{unifiedSummary.counts?.snapdealCancelled ?? 0}</p>
+              </div>
+              <div className="bg-white p-3 rounded-lg border border-blue-200 shadow-xs">
+                <p className="text-xs text-blue-700 font-semibold uppercase tracking-wider">Flipkart Cancelled</p>
+                <p className="text-2xl font-black text-blue-800 mt-1">{unifiedSummary.counts?.flipkartCancelled ?? 0}</p>
+              </div>
+              <div className="bg-white p-3 rounded-lg border border-pink-200 shadow-xs">
+                <p className="text-xs text-pink-700 font-semibold uppercase tracking-wider">Myntra Cancelled</p>
+                <p className="text-2xl font-black text-pink-800 mt-1">{unifiedSummary.counts?.myntraCancelled ?? 0}</p>
+              </div>
             </div>
-            <div className="bg-white p-3 rounded-lg border border-purple-200 shadow-xs">
-              <p className="text-xs text-purple-700 font-semibold uppercase tracking-wider">Meesho Customer Returns</p>
-              <p className="text-2xl font-black text-purple-800 mt-1">{unifiedSummary.counts?.meeshoCustomerReturns ?? 0}</p>
+          ) : (
+            <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div className="bg-white p-3 rounded-lg border border-amber-200 shadow-xs">
+                <p className="text-xs text-amber-700 font-semibold uppercase tracking-wider">Meesho RTO Returns</p>
+                <p className="text-2xl font-black text-amber-800 mt-1">{unifiedSummary.counts?.meeshoReturns ?? 0}</p>
+              </div>
+              <div className="bg-white p-3 rounded-lg border border-purple-200 shadow-xs">
+                <p className="text-xs text-purple-700 font-semibold uppercase tracking-wider">Meesho Customer Returns</p>
+                <p className="text-2xl font-black text-purple-800 mt-1">{unifiedSummary.counts?.meeshoCustomerReturns ?? 0}</p>
+              </div>
+              <div className="bg-white p-3 rounded-lg border border-orange-200 shadow-xs">
+                <p className="text-xs text-orange-700 font-semibold uppercase tracking-wider">Snapdeal RTO Returns</p>
+                <p className="text-2xl font-black text-orange-800 mt-1">{unifiedSummary.counts?.snapdealReturns ?? 0}</p>
+              </div>
+              <div className="bg-white p-3 rounded-lg border border-indigo-200 shadow-xs">
+                <p className="text-xs text-indigo-700 font-semibold uppercase tracking-wider">Snapdeal Customer Returns</p>
+                <p className="text-2xl font-black text-indigo-800 mt-1">{unifiedSummary.counts?.snapdealCustomerReturns ?? 0}</p>
+              </div>
+              {((unifiedSummary.counts?.flipkartReturns ?? 0) > 0 || (unifiedSummary.counts?.flipkartCustomerReturns ?? 0) > 0) && (
+                <>
+                  <div className="bg-white p-3 rounded-lg border border-blue-200 shadow-xs">
+                    <p className="text-xs text-blue-700 font-semibold uppercase tracking-wider">Flipkart RTO Returns</p>
+                    <p className="text-2xl font-black text-blue-800 mt-1">{unifiedSummary.counts?.flipkartReturns ?? 0}</p>
+                  </div>
+                  <div className="bg-white p-3 rounded-lg border border-cyan-200 shadow-xs">
+                    <p className="text-xs text-cyan-700 font-semibold uppercase tracking-wider">Flipkart Customer Returns</p>
+                    <p className="text-2xl font-black text-cyan-800 mt-1">{unifiedSummary.counts?.flipkartCustomerReturns ?? 0}</p>
+                  </div>
+                </>
+              )}
+              {((unifiedSummary.counts?.myntraReturns ?? 0) > 0 || (unifiedSummary.counts?.myntraCustomerReturns ?? 0) > 0) && (
+                <>
+                  <div className="bg-white p-3 rounded-lg border border-pink-200 shadow-xs">
+                    <p className="text-xs text-pink-700 font-semibold uppercase tracking-wider">Myntra RTO Returns</p>
+                    <p className="text-2xl font-black text-pink-800 mt-1">{unifiedSummary.counts?.myntraReturns ?? 0}</p>
+                  </div>
+                  <div className="bg-white p-3 rounded-lg border border-rose-200 shadow-xs">
+                    <p className="text-xs text-rose-700 font-semibold uppercase tracking-wider">Myntra Customer Returns</p>
+                    <p className="text-2xl font-black text-rose-800 mt-1">{unifiedSummary.counts?.myntraCustomerReturns ?? 0}</p>
+                  </div>
+                </>
+              )}
             </div>
-            <div className="bg-white p-3 rounded-lg border border-orange-200 shadow-xs">
-              <p className="text-xs text-orange-700 font-semibold uppercase tracking-wider">Snapdeal RTO Returns</p>
-              <p className="text-2xl font-black text-orange-800 mt-1">{unifiedSummary.counts?.snapdealReturns ?? 0}</p>
-            </div>
-            <div className="bg-white p-3 rounded-lg border border-indigo-200 shadow-xs">
-              <p className="text-xs text-indigo-700 font-semibold uppercase tracking-wider">Snapdeal Customer Returns</p>
-              <p className="text-2xl font-black text-indigo-800 mt-1">{unifiedSummary.counts?.snapdealCustomerReturns ?? 0}</p>
-            </div>
-            {((unifiedSummary.counts?.flipkartReturns ?? 0) > 0 || (unifiedSummary.counts?.flipkartCustomerReturns ?? 0) > 0) && (
-              <>
-                <div className="bg-white p-3 rounded-lg border border-blue-200 shadow-xs">
-                  <p className="text-xs text-blue-700 font-semibold uppercase tracking-wider">Flipkart RTO Returns</p>
-                  <p className="text-2xl font-black text-blue-800 mt-1">{unifiedSummary.counts?.flipkartReturns ?? 0}</p>
-                </div>
-                <div className="bg-white p-3 rounded-lg border border-cyan-200 shadow-xs">
-                  <p className="text-xs text-cyan-700 font-semibold uppercase tracking-wider">Flipkart Customer Returns</p>
-                  <p className="text-2xl font-black text-cyan-800 mt-1">{unifiedSummary.counts?.flipkartCustomerReturns ?? 0}</p>
-                </div>
-              </>
-            )}
-            {((unifiedSummary.counts?.myntraReturns ?? 0) > 0 || (unifiedSummary.counts?.myntraCustomerReturns ?? 0) > 0) && (
-              <>
-                <div className="bg-white p-3 rounded-lg border border-pink-200 shadow-xs">
-                  <p className="text-xs text-pink-700 font-semibold uppercase tracking-wider">Myntra RTO Returns</p>
-                  <p className="text-2xl font-black text-pink-800 mt-1">{unifiedSummary.counts?.myntraReturns ?? 0}</p>
-                </div>
-                <div className="bg-white p-3 rounded-lg border border-rose-200 shadow-xs">
-                  <p className="text-xs text-rose-700 font-semibold uppercase tracking-wider">Myntra Customer Returns</p>
-                  <p className="text-2xl font-black text-rose-800 mt-1">{unifiedSummary.counts?.myntraCustomerReturns ?? 0}</p>
-                </div>
-              </>
-            )}
-          </div>
+          )}
           <div className="mt-2.5 pt-2 border-t border-emerald-100 flex flex-wrap items-center justify-between text-xs text-emerald-800">
-            <span>Total Returns Saved: <strong className="text-emerald-950 font-bold">{unifiedSummary.counts?.total ?? 0} orders</strong></span>
+            <span>
+              {unifiedSummary.isCancelled ? 'Total Cancelled Orders Saved: ' : 'Total Returns Saved: '}
+              <strong className="text-emerald-950 font-bold">{unifiedSummary.counts?.total ?? 0} orders</strong>
+            </span>
             {unifiedSummary.duplicatesSkipped > 0 && (
               <span className="text-amber-800 font-medium bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
                 ✓ {unifiedSummary.duplicatesSkipped} duplicate barcode scans automatically filtered out
@@ -1640,9 +1752,11 @@ export default function CancelOrder({ apiPath = 'cancelled-orders', title = 'Can
           <div className="bg-white rounded-xl shadow-2xl max-w-xl w-full p-6 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between pb-3 border-b border-gray-200 mb-4">
               <div className="flex items-center gap-2">
-                <span className="text-2xl">📦</span>
+                <span className="text-2xl">{pendingUploadData.isCancelled ? '❌' : '📦'}</span>
                 <div>
-                  <h3 className="text-lg font-bold text-gray-900">Confirm Returns Upload</h3>
+                  <h3 className="text-lg font-bold text-gray-900">
+                    {pendingUploadData.isCancelled ? 'Confirm Cancelled Orders Upload' : 'Confirm Returns Upload'}
+                  </h3>
                   <p className="text-xs text-gray-500">Review distribution before saving to database</p>
                 </div>
               </div>
@@ -1659,6 +1773,65 @@ export default function CancelOrder({ apiPath = 'cancelled-orders', title = 'Can
             </div>
 
             <p className="text-xs font-bold text-gray-700 uppercase tracking-wider mb-2">Platform Breakdown:</p>
+            {pendingUploadData.isCancelled ? (
+              <div className="grid grid-cols-2 gap-3 mb-4">
+                {/* Meesho */}
+                <div className="p-3 bg-amber-50/60 border border-amber-200 rounded-lg">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="font-bold text-xs text-amber-900 uppercase">Meesho</span>
+                    <span className="text-xs font-black text-amber-800 bg-amber-100 px-2 py-0.5 rounded">
+                      {pendingUploadData.parsed.counts?.meeshoCancelled || 0}
+                    </span>
+                  </div>
+                  <div className="text-xs text-gray-600">
+                    <span>Cancelled Orders: </span>
+                    <strong className="text-amber-900">{pendingUploadData.parsed.counts?.meeshoCancelled || 0}</strong>
+                  </div>
+                </div>
+
+                {/* Snapdeal */}
+                <div className="p-3 bg-orange-50/60 border border-orange-200 rounded-lg">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="font-bold text-xs text-orange-900 uppercase">Snapdeal</span>
+                    <span className="text-xs font-black text-orange-800 bg-orange-100 px-2 py-0.5 rounded">
+                      {pendingUploadData.parsed.counts?.snapdealCancelled || 0}
+                    </span>
+                  </div>
+                  <div className="text-xs text-gray-600">
+                    <span>Cancelled Orders: </span>
+                    <strong className="text-orange-900">{pendingUploadData.parsed.counts?.snapdealCancelled || 0}</strong>
+                  </div>
+                </div>
+
+                {/* Flipkart */}
+                <div className="p-3 bg-blue-50/60 border border-blue-200 rounded-lg">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="font-bold text-xs text-blue-900 uppercase">Flipkart</span>
+                    <span className="text-xs font-black text-blue-800 bg-blue-100 px-2 py-0.5 rounded">
+                      {pendingUploadData.parsed.counts?.flipkartCancelled || 0}
+                    </span>
+                  </div>
+                  <div className="text-xs text-gray-600">
+                    <span>Cancelled Orders: </span>
+                    <strong className="text-blue-900">{pendingUploadData.parsed.counts?.flipkartCancelled || 0}</strong>
+                  </div>
+                </div>
+
+                {/* Myntra */}
+                <div className="p-3 bg-pink-50/60 border border-pink-200 rounded-lg">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="font-bold text-xs text-pink-900 uppercase">Myntra</span>
+                    <span className="text-xs font-black text-pink-800 bg-pink-100 px-2 py-0.5 rounded">
+                      {pendingUploadData.parsed.counts?.myntraCancelled || 0}
+                    </span>
+                  </div>
+                  <div className="text-xs text-gray-600">
+                    <span>Cancelled Orders: </span>
+                    <strong className="text-pink-900">{pendingUploadData.parsed.counts?.myntraCancelled || 0}</strong>
+                  </div>
+                </div>
+              </div>
+            ) : (
             <div className="grid grid-cols-2 gap-3 mb-4">
               {/* Meesho */}
               <div className="p-3 bg-amber-50/60 border border-amber-200 rounded-lg">
@@ -1740,6 +1913,7 @@ export default function CancelOrder({ apiPath = 'cancelled-orders', title = 'Can
                 </div>
               </div>
             </div>
+            )}
 
             <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-lg mb-5 space-y-1 text-xs text-emerald-950">
               <div className="flex justify-between items-center text-sm">
@@ -1919,65 +2093,65 @@ export default function CancelOrder({ apiPath = 'cancelled-orders', title = 'Can
                 />
               </div>
 
-              {/* Portals Selection Choice (Only for Returns/Customer Returns) */}
-              {isReturnsTab && (
-                <div className="space-y-2 pt-1 border-t border-gray-200">
-                  <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1">
-                    Portals Deletion Scope:
-                  </label>
-                  <label className={`flex items-start gap-2.5 p-3 rounded-lg border cursor-pointer transition-all ${
-                    deleteScope === 'all'
-                      ? 'bg-red-50/70 border-red-400 shadow-xs'
-                      : 'bg-white border-gray-200 hover:bg-gray-50'
-                  }`}>
-                    <input
-                      type="radio"
-                      name="deleteScope"
-                      value="all"
-                      checked={deleteScope === 'all'}
-                      onChange={() => setDeleteScope('all')}
-                      className="mt-0.5 text-red-600 focus:ring-red-500"
-                    />
-                    <div className="flex-1">
-                      <p className="text-xs font-bold text-gray-900">
-                        Delete across ALL Portals (Unified Cleanup)
-                      </p>
-                      <p className="text-[11px] text-gray-600 mt-0.5">
-                        Removes both RTO and Customer Returns across Meesho, Snapdeal, Flipkart, and Myntra for this date.
-                      </p>
-                      <div className="flex flex-wrap gap-1 mt-1.5">
-                        <span className="text-[10px] font-bold bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded">Meesho</span>
-                        <span className="text-[10px] font-bold bg-orange-100 text-orange-800 px-1.5 py-0.5 rounded">Snapdeal</span>
-                        <span className="text-[10px] font-bold bg-blue-100 text-blue-800 px-1.5 py-0.5 rounded">Flipkart</span>
-                        <span className="text-[10px] font-bold bg-pink-100 text-pink-800 px-1.5 py-0.5 rounded">Myntra</span>
-                      </div>
+              {/* Portals Selection Choice (For Returns, Customer Returns, and Cancelled Orders) */}
+              <div className="space-y-2 pt-1 border-t border-gray-200">
+                <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1">
+                  Portals Deletion Scope:
+                </label>
+                <label className={`flex items-start gap-2.5 p-3 rounded-lg border cursor-pointer transition-all ${
+                  deleteScope === 'all'
+                    ? 'bg-red-50/70 border-red-400 shadow-xs'
+                    : 'bg-white border-gray-200 hover:bg-gray-50'
+                }`}>
+                  <input
+                    type="radio"
+                    name="deleteScope"
+                    value="all"
+                    checked={deleteScope === 'all'}
+                    onChange={() => setDeleteScope('all')}
+                    className="mt-0.5 text-red-600 focus:ring-red-500"
+                  />
+                  <div className="flex-1">
+                    <p className="text-xs font-bold text-gray-900">
+                      Delete across ALL Portals (Unified Cleanup)
+                    </p>
+                    <p className="text-[11px] text-gray-600 mt-0.5">
+                      {isReturnsTab
+                        ? 'Removes both RTO and Customer Returns across Meesho, Snapdeal, Flipkart, and Myntra for this date.'
+                        : 'Removes Cancelled Orders across Meesho, Snapdeal, Flipkart, and Myntra for this date.'}
+                    </p>
+                    <div className="flex flex-wrap gap-1 mt-1.5">
+                      <span className="text-[10px] font-bold bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded">Meesho</span>
+                      <span className="text-[10px] font-bold bg-orange-100 text-orange-800 px-1.5 py-0.5 rounded">Snapdeal</span>
+                      <span className="text-[10px] font-bold bg-blue-100 text-blue-800 px-1.5 py-0.5 rounded">Flipkart</span>
+                      <span className="text-[10px] font-bold bg-pink-100 text-pink-800 px-1.5 py-0.5 rounded">Myntra</span>
                     </div>
-                  </label>
+                  </div>
+                </label>
 
-                  <label className={`flex items-start gap-2.5 p-3 rounded-lg border cursor-pointer transition-all ${
-                    deleteScope === 'current'
-                      ? 'bg-gray-100 border-gray-400 shadow-xs'
-                      : 'bg-white border-gray-200 hover:bg-gray-50'
-                  }`}>
-                    <input
-                      type="radio"
-                      name="deleteScope"
-                      value="current"
-                      checked={deleteScope === 'current'}
-                      onChange={() => setDeleteScope('current')}
-                      className="mt-0.5 text-gray-600 focus:ring-gray-500"
-                    />
-                    <div>
-                      <p className="text-xs font-bold text-gray-900">
-                        Delete ONLY from {title} ({platform.toUpperCase()})
-                      </p>
-                      <p className="text-[11px] text-gray-500 mt-0.5">
-                        Only deletes records from the current active tab.
-                      </p>
-                    </div>
-                  </label>
-                </div>
-              )}
+                <label className={`flex items-start gap-2.5 p-3 rounded-lg border cursor-pointer transition-all ${
+                  deleteScope === 'current'
+                    ? 'bg-gray-100 border-gray-400 shadow-xs'
+                    : 'bg-white border-gray-200 hover:bg-gray-50'
+                }`}>
+                  <input
+                    type="radio"
+                    name="deleteScope"
+                    value="current"
+                    checked={deleteScope === 'current'}
+                    onChange={() => setDeleteScope('current')}
+                    className="mt-0.5 text-gray-600 focus:ring-gray-500"
+                  />
+                  <div>
+                    <p className="text-xs font-bold text-gray-900">
+                      Delete ONLY from {title} ({platform.toUpperCase()})
+                    </p>
+                    <p className="text-[11px] text-gray-500 mt-0.5">
+                      Only deletes records from the current active tab.
+                    </p>
+                  </div>
+                </label>
+              </div>
 
               <div className="flex gap-3 pt-2">
                 <button
@@ -1985,7 +2159,7 @@ export default function CancelOrder({ apiPath = 'cancelled-orders', title = 'Can
                   disabled={loading || !deleteDate}
                   className="flex-1 py-3 px-4 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:bg-gray-300 font-bold text-sm transition-colors shadow-sm"
                 >
-                  {loading ? 'Deleting...' : (isReturnsTab && deleteScope === 'all' ? 'Delete Across All Portals' : 'Delete Permanently')}
+                  {loading ? 'Deleting...' : (deleteScope === 'all' ? 'Delete Across All Portals' : 'Delete Permanently')}
                 </button>
                 <button
                   onClick={() => setShowDeleteModal(false)}
