@@ -1787,18 +1787,21 @@ export default function ExtractSKU() {
         let companyName = null;
         for (let j = 0; j < lines.length; j++) {
           const line = lines[j];
-          if (line.toLowerCase().includes('return to:')) {
+          if (/if undelivered.*return to/i.test(line) || /return to/i.test(line)) {
             const colonIndex = line.indexOf(':');
-            if (colonIndex !== -1) {
+            if (colonIndex !== -1 && colonIndex < line.length - 1) {
               const afterColon = line.substring(colonIndex + 1).trim();
-              if (afterColon) {
+              if (afterColon && !/normal|fwd|buyer|declared/i.test(afterColon)) {
                 companyName = afterColon.split(',')[0].trim();
                 break;
               }
             }
             if (j + 1 < lines.length) {
-              companyName = lines[j + 1].trim().split(',')[0].trim();
-              break;
+              const nextLine = lines[j + 1].trim();
+              if (nextLine && !/normal|fwd|buyer|declared/i.test(nextLine)) {
+                companyName = nextLine.split(',')[0].trim();
+                break;
+              }
             }
           }
         }
@@ -1807,6 +1810,14 @@ export default function ExtractSKU() {
         if (!companyName) {
           for (let j = 0; j < lines.length; j++) {
             const line = lines[j].trim();
+            if (/ZXRIZ|ZXIRZ|CHINTAN\s+LALLUBHAI|24CPHPD1557F3Z6/i.test(line)) {
+              companyName = 'ZXRIZ';
+              break;
+            }
+            if (/COSMETIC\s*KING|24DBAPD3920E1ZE/i.test(line)) {
+              companyName = 'Cosmetic King';
+              break;
+            }
             if (/seller\s+details/i.test(line)) {
               const prev1 = lines[j - 1]?.trim() || '';
               const prev2 = lines[j - 2]?.trim() || '';
@@ -1911,14 +1922,24 @@ export default function ExtractSKU() {
             }
           }
 
-          // Pattern 3: Slash size format on Shipping Label: e.g. "db_46 / Onesize", "db_46 / Free Size"
-          const slashMatch = trimmed.match(/^([A-Za-z0-9_\.\-]+(?:\s+[A-Za-z0-9_\.\-]+)*)\s*\/\s*(?:Onesize|Free\s*Size|Free|FS|OS|XXXL|XXL|XL|XS|[SML]|[0-9]+(?:\s*(?:mm|cm|inch|in|m|kg|g|ml))?|[0-9]+)\s*(?:-\s*(\d+))?$/i);
+          // Pattern 3: Slash size format on Shipping Label: e.g. "db_46 / Onesize", "db_46 / Free Size", "qc_52 / Pack"
+          const slashMatch = trimmed.match(/^([A-Za-z0-9_\.\-]+(?:\s+[A-Za-z0-9_\.\-]+)*)\s*\/\s*([^-\n]+?)\s*(?:-\s*(\d+))?$/i);
           if (slashMatch) {
             const candidateSku = slashMatch[1].trim();
-            const isExcluded = /NORMAL|FWD|COD|PREPAID|MYNTRA|NULL|EK_E2E|DE_E2E|^[A-Z0-9]{2,4}\/[A-Z0-9]{2,4}$/i.test(trimmed);
-            if (!isExcluded && candidateSku.length >= 2 && candidateSku.length <= 40) {
-              const qty = slashMatch[2] ? parseInt(slashMatch[2], 10) : 1;
-              addItem(candidateSku, qty);
+            const sizePart = slashMatch[2].trim();
+            const isExcluded = 
+              /NORMAL|FWD|COD|PREPAID|MYNTRA|NULL|EK_E2E|DE_E2E|HTTP|\.COM|WWW|CONTACTUS|RS\./i.test(trimmed) ||
+              /^[A-Z0-9]{2,4}\/[A-Z0-9]{2,4}$/.test(trimmed) ||
+              /[,;:]/.test(trimmed) ||
+              candidateSku.length < 2 || candidateSku.length > 40 ||
+              sizePart.length < 1 || sizePart.length > 25 ||
+              /\b(?:COLONY|ROAD|NAGAR|SECTOR|STREET|HOUSE|VILLAGE|CITY|CAMPUS|PUR|MARKET|INDIA)\b/i.test(sizePart);
+
+            const validSizePattern = /^(?:Onesize|Free\s*Size|Free|FS|OS|Pack|Set|Pcs|Piece|Pair|Standard|XXXL|XXL|XL|XS|[SML]|[0-9]+(?:\s*(?:mm|cm|inch|in|m|kg|g|ml))?|[0-9]+)$/i;
+
+            if (!isExcluded && validSizePattern.test(sizePart)) {
+              // Consider single quantity for now as requested
+              addItem(candidateSku, 1);
               continue;
             }
           }
@@ -5070,8 +5091,15 @@ export default function ExtractSKU() {
                         onClick={async () => {
                           setShowOverwriteWarning(false);
                           setExistingDataInfo(null);
-                          // Process upload using selectedFile state
-                          await processAndUploadPDF();
+                          if (currentPlatform === 'flipkart') {
+                            await processAndUploadFlipkartPDF(null, selectedFile, selectedDate);
+                          } else if (currentPlatform === 'snapdeal') {
+                            await processAndUploadSnapdealPDF(null, selectedFile, selectedDate);
+                          } else if (currentPlatform === 'myntra') {
+                            await processAndUploadMyntraPDF(null, selectedFile, selectedDate);
+                          } else {
+                            await processAndUploadPDF(null, selectedFile, selectedDate);
+                          }
                         }}
                         className="flex-1 py-3 px-4 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-semibold text-sm flex items-center justify-center gap-2"
                       >
