@@ -122,11 +122,11 @@ export default function ExtractSKU() {
       } else if (['inventory', 'cancelled-orders', 'returns', 'customer-returns', 'reconciliation-billing', 'billing'].includes(tab)) {
         setMainTab('meesho_reconciliation');
         if (tab === 'billing') setSelectedTab('reconciliation-billing');
-      } else if (['flipkart-inventory', 'flipkart-returns', 'flipkart-customer-returns', 'flipkart-reconciliation-billing'].includes(tab)) {
+      } else if (['flipkart-inventory', 'flipkart-cancelled-orders', 'flipkart-returns', 'flipkart-customer-returns', 'flipkart-reconciliation-billing'].includes(tab)) {
         setMainTab('flipkart_reconciliation');
       } else if (['snapdeal-inventory', 'snapdeal-cancelled-orders', 'snapdeal-returns', 'snapdeal-customer-returns', 'snapdeal-reconciliation-billing'].includes(tab)) {
         setMainTab('snapdeal_reconciliation');
-      } else if (['myntra-inventory', 'myntra-returns', 'myntra-customer-returns', 'myntra-reconciliation-billing'].includes(tab)) {
+      } else if (['myntra-inventory', 'myntra-cancelled-orders', 'myntra-returns', 'myntra-customer-returns', 'myntra-reconciliation-billing'].includes(tab)) {
         setMainTab('myntra_reconciliation');
       }
     }
@@ -2078,7 +2078,7 @@ export default function ExtractSKU() {
               <button
                 onClick={() => {
                   setMainTab('flipkart_reconciliation');
-                  if (!['flipkart-inventory', 'flipkart-returns', 'flipkart-customer-returns', 'flipkart-reconciliation-billing'].includes(selectedTab)) {
+                  if (!['flipkart-inventory', 'flipkart-cancelled-orders', 'flipkart-returns', 'flipkart-customer-returns', 'flipkart-reconciliation-billing'].includes(selectedTab)) {
                     setSelectedTab('flipkart-inventory');
                   }
                 }}
@@ -2108,7 +2108,7 @@ export default function ExtractSKU() {
               <button
                 onClick={() => {
                   setMainTab('myntra_reconciliation');
-                  if (!['myntra-inventory', 'myntra-returns', 'myntra-customer-returns', 'myntra-reconciliation-billing'].includes(selectedTab)) {
+                  if (!['myntra-inventory', 'myntra-cancelled-orders', 'myntra-returns', 'myntra-customer-returns', 'myntra-reconciliation-billing'].includes(selectedTab)) {
                     setSelectedTab('myntra-inventory');
                   }
                 }}
@@ -2364,6 +2364,22 @@ export default function ExtractSKU() {
               </div>
             </button>
             <button
+              onClick={() => setSelectedTab('flipkart-cancelled-orders')}
+              disabled={!flagsLoading && !checkFeature('isCancelledOrders')}
+              className={`py-3 px-1 border-b-2 font-medium text-sm transition-all duration-200 ${
+                selectedTab === 'flipkart-cancelled-orders'
+                  ? 'border-yellow-400 text-yellow-400'
+                  : 'border-transparent text-white hover:text-gray-100 hover:border-gray-500'
+              } ${!flagsLoading && !checkFeature('isCancelledOrders') ? 'opacity-50 cursor-not-allowed' : ''}`}
+            >
+              <div className="flex items-center space-x-2">
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+                <span>Cancelled Orders</span>
+              </div>
+            </button>
+            <button
               onClick={() => setSelectedTab('flipkart-returns')}
               disabled={!flagsLoading && !checkFeature('isReturns')}
               className={`py-3 px-1 border-b-2 font-medium text-sm transition-all duration-200 ${
@@ -2505,6 +2521,22 @@ export default function ExtractSKU() {
               <div className="flex items-center space-x-2">
                 <FaBoxOpen className={`w-4 h-4 ${selectedTab === 'myntra-inventory' ? 'text-pink-400' : 'text-gray-400'}`} />
                 <span>Myntra Inventory</span>
+              </div>
+            </button>
+            <button
+              onClick={() => setSelectedTab('myntra-cancelled-orders')}
+              disabled={!flagsLoading && !checkFeature('isCancelledOrders')}
+              className={`py-3 px-1 border-b-2 font-medium text-sm transition-all duration-200 ${
+                selectedTab === 'myntra-cancelled-orders'
+                  ? 'border-pink-400 text-pink-400'
+                  : 'border-transparent text-white hover:text-gray-100 hover:border-gray-500'
+              } ${!flagsLoading && !checkFeature('isCancelledOrders') ? 'opacity-50 cursor-not-allowed' : ''}`}
+            >
+              <div className="flex items-center space-x-2">
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+                <span>Cancelled Orders</span>
               </div>
             </button>
             <button
@@ -3401,6 +3433,19 @@ export default function ExtractSKU() {
           />
         )}
 
+        {selectedTab === 'flipkart-cancelled-orders' && (
+          !checkFeature('isCancelledOrders') ? (
+            <div className="p-4">
+              <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6 text-center">
+                <h2 className="text-xl font-semibold text-yellow-800 mb-2">Feature Not Available</h2>
+                <p className="text-yellow-700">Cancelled Orders feature is not enabled for your company. Please contact your administrator.</p>
+              </div>
+            </div>
+          ) : (
+            <CancelOrder platform="flipkart" title="Flipkart Cancelled Orders" />
+          )
+        )}
+
         {selectedTab === 'flipkart-returns' && (
           !checkFeature('isReturns') ? (
             <div className="p-4">
@@ -3451,6 +3496,19 @@ export default function ExtractSKU() {
               router.push(`/extract-sku?${params.toString()}`, undefined, { shallow: true });
             }}
           />
+        )}
+
+        {selectedTab === 'myntra-cancelled-orders' && (
+          !checkFeature('isCancelledOrders') ? (
+            <div className="p-4">
+              <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6 text-center">
+                <h2 className="text-xl font-semibold text-yellow-800 mb-2">Feature Not Available</h2>
+                <p className="text-yellow-700">Cancelled Orders feature is not enabled for your company. Please contact your administrator.</p>
+              </div>
+            </div>
+          ) : (
+            <CancelOrder platform="myntra" title="Myntra Cancelled Orders" />
+          )
         )}
 
         {selectedTab === 'myntra-returns' && (
