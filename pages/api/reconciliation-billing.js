@@ -217,25 +217,13 @@ async function handler(req, res) {
     for (const r of masterRateDocs) {
       const cleanOrigin = (r.origin || '').trim().toLowerCase();
       if (cleanOrigin) {
-        // Pre-parse and chronologically sort rateHistory entries (earliest to latest)
-        const parsedHistory = (Array.isArray(r.rateHistory) ? r.rateHistory : [])
-          .filter(h => h && h.effectiveFrom)
-          .map(h => ({
-            fromMs: new Date(h.effectiveFrom).setHours(0, 0, 0, 0),
-            itemRate: Number(h.itemRate) || 0,
-            boxRate: Number(h.boxRate) || 0,
-            boxReturnRate: Number(h.boxReturnRate) || 0
-          }))
-          .sort((a, b) => a.fromMs - b.fromMs);
-
         originToRateMap.set(cleanOrigin, {
           origin: r.origin,
           itemRate: Number(r.itemRate) || 0,
           boxRate: Number(r.boxRate) || 0,
           boxReturnRate: Number(r.boxReturnRate) || 0,
           imageLink: r.imageLink || '',
-          size: r.size || '',
-          parsedHistory
+          size: r.size || ''
         });
       }
     }
@@ -276,15 +264,14 @@ async function handler(req, res) {
     returnRows.forEach(registerItem);
     custReturnRows.forEach(registerItem);
 
-    // Memoized Helper to resolve rates for an SKU on a specific order date
+    // Always use the CURRENT / LATEST active rates from MasterRate for all billing calculations.
+    // rateHistory is retained in DB and MasterRateManager for audit/historical reference only.
     const rateCache = new Map();
 
-    const resolveRates = (rawSku, orderDateStr) => {
+    const resolveRates = (rawSku) => {
       const cleanSku = (rawSku || '').trim().toLowerCase();
-      const dKey = orderDateStr ? String(orderDateStr).slice(0, 10) : '';
-      const cacheKey = `${cleanSku}:::${dKey}`;
-      if (rateCache.has(cacheKey)) {
-        return rateCache.get(cacheKey);
+      if (rateCache.has(cleanSku)) {
+        return rateCache.get(cleanSku);
       }
 
       const skuMapping = skuToOriginMap.get(cleanSku);
@@ -293,38 +280,9 @@ async function handler(req, res) {
 
       const rateDoc = originName ? originToRateMap.get(originName.toLowerCase()) : null;
 
-      let itemRate = rateDoc?.itemRate || 0;
-      let boxRate = rateDoc?.boxRate || 0;
-      let boxReturnRate = rateDoc?.boxReturnRate || 0;
-
-      // Date-effective rate resolution:
-      // If the origin has a rateHistory, find the latest rate effective on or before orderDate.
-      if (rateDoc && rateDoc.parsedHistory && rateDoc.parsedHistory.length > 0 && orderDateStr) {
-        try {
-          const oDateMs = new Date(orderDateStr).setHours(12, 0, 0, 0);
-          if (!isNaN(oDateMs)) {
-            let matched = null;
-            // Iterate backwards (from newest to oldest) to find the latest effectiveFrom <= orderDate
-            for (let i = rateDoc.parsedHistory.length - 1; i >= 0; i--) {
-              if (rateDoc.parsedHistory[i].fromMs <= oDateMs) {
-                matched = rateDoc.parsedHistory[i];
-                break;
-              }
-            }
-            // If orderDate is earlier than all recorded effectiveFrom dates, use the earliest recorded rate
-            if (!matched) {
-              matched = rateDoc.parsedHistory[0];
-            }
-            if (matched) {
-              itemRate = matched.itemRate;
-              boxRate = matched.boxRate;
-              boxReturnRate = matched.boxReturnRate;
-            }
-          }
-        } catch (e) {
-          // Fallback to active rate if invalid date
-        }
-      }
+      const itemRate = rateDoc?.itemRate || 0;
+      const boxRate = rateDoc?.boxRate || 0;
+      const boxReturnRate = rateDoc?.boxReturnRate || 0;
 
       // Formula:
       // Meesho inventory = rate + dabbi
@@ -347,7 +305,7 @@ async function handler(req, res) {
         retUnitRate
       };
 
-      rateCache.set(cacheKey, result);
+      rateCache.set(cleanSku, result);
       return result;
     };
 
@@ -437,10 +395,10 @@ async function handler(req, res) {
       return dateMap.get(d);
     };
 
-    const getOrCreateSku = (rawSku, orderDate) => {
+    const getOrCreateSku = (rawSku) => {
       const cleanSku = (rawSku || '').trim();
       if (!skuMap.has(cleanSku)) {
-        const rateInfo = resolveRates(cleanSku, orderDate || startDate);
+        const rateInfo = resolveRates(cleanSku);
         skuMap.set(cleanSku, {
           sku: cleanSku,
           ...rateInfo,
@@ -468,8 +426,7 @@ async function handler(req, res) {
     invRows.forEach((r) => {
       const qty = Number(r.quantity) || 0;
       if (qty <= 0) return;
-      const orderDate = r.selectedDate;
-      const rates = resolveRates(r.sku, orderDate);
+      const rates = resolveRates(r.sku);
       const amount = qty * rates.invUnitRate;
       const printAmt = qty * printRate;
 
@@ -489,7 +446,7 @@ async function handler(req, res) {
       dt.inventoryAmount += amount;
       dt.printCharge += printAmt;
 
-      const sk = getOrCreateSku(r.sku, r.selectedDate);
+      const sk = getOrCreateSku(r.sku);
       sk.inventoryQty += qty;
       sk.inventoryAmount += amount;
       sk.printCharge += printAmt;
@@ -500,8 +457,7 @@ async function handler(req, res) {
     cancelRows.forEach((r) => {
       const qty = Number(r.quantity) || 0;
       if (qty <= 0) return;
-      const orderDate = r.startDate || r.selectedDate;
-      const rates = resolveRates(r.sku, orderDate);
+      const rates = resolveRates(r.sku);
       const amount = qty * rates.cancelUnitRate; // Cancel order = rate + dabbi return rate
 
       summary.cancelledQty += qty;
@@ -517,7 +473,7 @@ async function handler(req, res) {
       dt.cancelledQty += qty;
       dt.cancelledAmount += amount;
 
-      const sk = getOrCreateSku(r.sku, r.startDate || r.selectedDate);
+      const sk = getOrCreateSku(r.sku);
       sk.cancelledQty += qty;
       sk.cancelledAmount += amount;
       if (r.companyName && isGenuineCompanyName(r.companyName)) sk.companies.add(getCanonicalName(r.companyName));
@@ -527,8 +483,7 @@ async function handler(req, res) {
     returnRows.forEach((r) => {
       const qty = Number(r.quantity) || 0;
       if (qty <= 0) return;
-      const orderDate = r.startDate || r.selectedDate;
-      const rates = resolveRates(r.sku, orderDate);
+      const rates = resolveRates(r.sku);
       const amount = qty * rates.retUnitRate; // Return = rate + dabbi return rate
 
       summary.returnsQty += qty;
@@ -544,7 +499,7 @@ async function handler(req, res) {
       dt.returnsQty += qty;
       dt.returnsAmount += amount;
 
-      const sk = getOrCreateSku(r.sku, r.startDate || r.selectedDate);
+      const sk = getOrCreateSku(r.sku);
       sk.returnsQty += qty;
       sk.returnsAmount += amount;
       if (r.companyName && isGenuineCompanyName(r.companyName)) sk.companies.add(getCanonicalName(r.companyName));
@@ -554,8 +509,7 @@ async function handler(req, res) {
     custReturnRows.forEach((r) => {
       const qty = Number(r.quantity) || 0;
       if (qty <= 0) return;
-      const orderDate = r.startDate || r.selectedDate;
-      const rates = resolveRates(r.sku, orderDate);
+      const rates = resolveRates(r.sku);
       const rawAmount = qty * rates.retUnitRate; // Customer Return = rate + dabbi return rate
       const effectiveAmount = rawAmount * (custReturnPercent / 100);
 
