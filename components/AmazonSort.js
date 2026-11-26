@@ -153,10 +153,28 @@ export default function AmazonSort({
         ? (findHeaderKeyInsensitive ? (findHeaderKeyInsensitive(csvData[0], 'Origin') || findHeaderKeyInsensitive(csvData[0], 'origin')) : Object.keys(csvData[0]).find(k => k.toLowerCase() === 'origin')) 
         : null;
 
+      const skuOriginMap = new Map();
+      if (hasDataSource && csvData.length && skuKey && originKey) {
+        csvData.forEach(r => {
+          const csvRaw = String(r[skuKey] || '').trim();
+          if (!csvRaw) return;
+          const orig = r[originKey] ? String(r[originKey]).trim() : '';
+          if (!orig) return;
+          const clean = getCleanSku(csvRaw).toLowerCase();
+          if (clean && !skuOriginMap.has(clean)) skuOriginMap.set(clean, orig);
+          const rawLow = csvRaw.toLowerCase();
+          if (rawLow && !skuOriginMap.has(rawLow)) skuOriginMap.set(rawLow, orig);
+        });
+      }
+
       function findOriginForSku(skuStr) {
         if (!hasDataSource || !csvData.length || !skuKey || !originKey || !skuStr) return null;
         const targetClean = getCleanSku(skuStr).toLowerCase();
         if (!targetClean) return null;
+
+        if (skuOriginMap.has(targetClean)) return skuOriginMap.get(targetClean);
+        const rawLow = String(skuStr).trim().toLowerCase();
+        if (skuOriginMap.has(rawLow)) return skuOriginMap.get(rawLow);
 
         const row = csvData.find(r => {
           const csvRaw = String(r[skuKey] || '').trim();
@@ -241,7 +259,7 @@ export default function AmazonSort({
         const totalQty = qty || 1;
         const isCombo = (totalQty > 1 || skus.length > 1);
         let orderOriginName = null;
-        if (dataFile) {
+        if (hasDataSource) {
           const targetSkus = skus.length > 0 ? skus : [primarySku];
           const itemOrigins = targetSkus.map(s => findOriginForSku(s) || 'Unknown Origin');
           const uniqueOrigins = Array.from(new Set(itemOrigins)).sort((a, b) => a.localeCompare(b));
@@ -261,20 +279,25 @@ export default function AmazonSort({
       if (orderData.length === 0) throw new Error('No valid Amazon orders found.');
 
       const originCounts = {};
-      if (dataFile) {
-        orderData.forEach((order) => {
-          const group = order.isCombo ? 'combo' : 'single';
+      const skuCounts = {};
+      orderData.forEach((order) => {
+        const group = order.isCombo ? 'combo' : 'single';
+        if (hasDataSource) {
           const origin = (order.originName || 'Unknown Origin').trim();
           const groupKey = `${group}_${origin}`;
           originCounts[groupKey] = (originCounts[groupKey] || 0) + 1;
-        });
-      }
+        } else {
+          const s = String(order.sku || '').trim();
+          const groupKey = `${group}_${s}`;
+          skuCounts[groupKey] = (skuCounts[groupKey] || 0) + 1;
+        }
+      });
 
       orderData.sort((a, b) => {
         const pA = a.isCombo ? 1 : 0;
         const pB = b.isCombo ? 1 : 0;
         if (pA !== pB) return pA - pB;
-        if (dataFile) {
+        if (hasDataSource) {
           const originA = (a.originName || 'Unknown Origin').trim();
           const originB = (b.originName || 'Unknown Origin').trim();
           if (originA !== originB) {
@@ -304,16 +327,23 @@ export default function AmazonSort({
       });
 
       const firstOriginIndex = {};
-      if (dataFile) {
-        orderData.forEach((order, index) => {
-          const group = order.isCombo ? 'combo' : 'single';
+      const firstSkuIndex = {};
+      orderData.forEach((order, index) => {
+        const group = order.isCombo ? 'combo' : 'single';
+        if (hasDataSource) {
           const origin = (order.originName || 'Unknown Origin').trim();
           const groupKey = `${group}_${origin}`;
           if (firstOriginIndex[groupKey] === undefined) {
             firstOriginIndex[groupKey] = index;
           }
-        });
-      }
+        } else {
+          const s = String(order.sku || '').trim();
+          const groupKey = `${group}_${s}`;
+          if (firstSkuIndex[groupKey] === undefined) {
+            firstSkuIndex[groupKey] = index;
+          }
+        }
+      });
 
       setStatus('Building output PDF...');
       const sourcePdfDoc = await PDFDocument.load(pdfArrayBuffer);
@@ -323,13 +353,23 @@ export default function AmazonSort({
       for (let i = 0; i < orderData.length; i++) {
         const order = orderData[i];
         const [copied] = await outPdf.copyPages(sourcePdfDoc, [order.firstPageNumber - 1]);
+        const { width } = copied.getSize();
+
         const originLabel = (order.originName || 'Unknown Origin').trim();
         const group = order.isCombo ? 'combo' : 'single';
-        const groupKey = `${group}_${originLabel}`;
-        const isFirstOfOrigin = dataFile && firstOriginIndex[groupKey] === i;
-        const totalOriginCount = dataFile ? (originCounts[groupKey] || 0) : 0;
-        const showCount = isFirstOfOrigin && totalOriginCount > 0;
-        const countStr = showCount ? `   (${totalOriginCount})` : '';
+        const originGroupKey = `${group}_${originLabel}`;
+        const skuGroupKey = `${group}_${String(order.sku || '').trim()}`;
+
+        const isFirstOfOrigin = hasDataSource && firstOriginIndex[originGroupKey] === i;
+        const totalOriginCount = hasDataSource ? (originCounts[originGroupKey] || 0) : 0;
+
+        const isFirstOfSku = !hasDataSource && firstSkuIndex[skuGroupKey] === i;
+        const totalSkuCount = !hasDataSource ? (skuCounts[skuGroupKey] || 0) : 0;
+
+        const showCount = hasDataSource
+          ? (isFirstOfOrigin && totalOriginCount > 0)
+          : (isFirstOfSku && totalSkuCount > 0);
+        const countValue = hasDataSource ? totalOriginCount : totalSkuCount;
 
         const displaySku = order.sku || '';
         const displayQty = order.qty;
@@ -338,19 +378,35 @@ export default function AmazonSort({
         if (order.skus.length > 1) {
           const skuCount = {};
           order.skus.forEach(s => { skuCount[s] = (skuCount[s] || 0) + 1; });
-          line = Object.entries(skuCount).map(([s, q], idx) => {
+          line = Object.entries(skuCount).map(([s, q]) => {
             const itemOrig = findOriginForSku(s) || (hasDataSource ? 'Unknown Origin' : null);
             const origPart = itemOrig ? ` : ${itemOrig}` : '';
-            const cStr = (idx === 0) ? countStr : '';
-            return `${s} | QTY - ${q}${origPart}${cStr}`;
+            return `${s} | QTY - ${q}${origPart}`;
           }).join('\n');
         } else {
           const itemOrig = findOriginForSku(displaySku) || (hasDataSource ? order.originName : null);
           const origPart = itemOrig ? ` : ${itemOrig}` : '';
-          line = `${displaySku} | QTY - ${displayQty}${origPart}${countStr}`;
+          line = `${displaySku} | QTY - ${displayQty}${origPart}`;
         }
 
-        copied.drawText(line, { x: 50, y: 150, size: 24, font, color: rgb(0, 0, 0) });
+        // Draw SKU & Origin text at left
+        copied.drawText(line, { x: 50, y: 150, size: 20, font, color: rgb(0, 0, 0) });
+
+        // Draw Total Count badge on right side on 1st page of each group
+        if (showCount && countValue > 0) {
+          const countText = `(${countValue})`;
+          const countFontSize = 26;
+          const countWidth = font.widthOfTextAtSize(countText, countFontSize);
+          const countX = Math.max(50, width - countWidth - 40);
+          copied.drawText(countText, {
+            x: countX,
+            y: 150,
+            size: countFontSize,
+            font,
+            color: rgb(0, 0, 0),
+          });
+        }
+
         outPdf.addPage(copied);
       }
 
