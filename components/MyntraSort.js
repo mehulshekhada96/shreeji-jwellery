@@ -47,7 +47,6 @@ export default function MyntraSort({
   // Parse Myntra SKU items from text lines and optional positional textContentItems
   function parseMyntraItems(lines, isTaxInvoice = false, textContentItems = null) {
     const items = [];
-    const seen = new Set();
 
     const isAddressOrExcluded = (str) => {
       if (!str) return true;
@@ -65,8 +64,13 @@ export default function MyntraSort({
       if (!cleanSku || cleanSku.length < 2 || cleanSku.length > 40) return;
       if (isAddressOrExcluded(cleanSku)) return;
       if (qty > 50) return; // Strict safety rail against PIN codes
-      const key = `${cleanSku}_${qty}`;
-      if (!seen.has(key)) {
+      
+      const existing = items.find(it => it.sku.toLowerCase() === cleanSku.toLowerCase());
+      if (existing) {
+        existing.qty += qty;
+        if (x !== undefined && existing.x === undefined) existing.x = x;
+        if (y !== undefined && existing.y === undefined) existing.y = y;
+      } else {
         items.push({ 
           sku: cleanSku, 
           displaySku: cleanSku, 
@@ -75,7 +79,6 @@ export default function MyntraSort({
           x,
           y
         });
-        seen.add(key);
       }
     };
 
@@ -109,27 +112,37 @@ export default function MyntraSort({
         return x < 150 && y >= 80 && y <= 185 && item.str.trim();
       });
 
+      // Sort top-to-bottom
+      boxItems.sort((a, b) => (b.transform?.[5] || 0) - (a.transform?.[5] || 0));
+
+      const seenPositions = [];
       for (const item of boxItems) {
         const trimmed = item.str.trim();
         if (!trimmed || isAddressOrExcluded(trimmed)) continue;
 
+        const x = item.transform ? item.transform[4] : 0;
+        const y = item.transform ? item.transform[5] : 0;
+        const isOverlaid = seenPositions.some(p => Math.abs(p.y - y) < 2 && Math.abs(p.x - x) < 5 && p.str === trimmed);
+        if (isOverlaid) continue;
+        seenPositions.push({ x, y, str: trimmed });
+
         const slashMatch = trimmed.match(/^([A-Za-z0-9_\.\-]+(?:\s+[A-Za-z0-9_\.\-]+)*)\s*\/\s*(?:Onesize|Free\s*Size|Free|FS|OS|Pack|Set|Pcs|Piece|Standard|XXXL|XXL|XL|XS|[SML]|[0-9]+(?:\s*(?:mm|cm|inch|in|m|kg|g|ml))?|[0-9]+)\s*(?:-\s*(\d+))?$/i);
         if (slashMatch) {
           const qty = slashMatch[2] ? parseInt(slashMatch[2], 10) : 1;
-          addItem(getCleanMyntraSku(slashMatch[1].trim()), qty, false, item.transform[4], item.transform[5]);
+          addItem(getCleanMyntraSku(slashMatch[1].trim()), qty, false, x, y);
           continue;
         }
 
         const hyphenMatch = trimmed.match(/^([A-Za-z0-9_\.]{2,35}(?:\s+[A-Za-z0-9_\.]{2,35})?)\s*-\s*([1-9]\d{0,1})?$/);
         if (hyphenMatch) {
           const qty = hyphenMatch[2] ? parseInt(hyphenMatch[2], 10) : 1;
-          addItem(getCleanMyntraSku(hyphenMatch[1].trim()), qty, false, item.transform[4], item.transform[5]);
+          addItem(getCleanMyntraSku(hyphenMatch[1].trim()), qty, false, x, y);
           continue;
         }
 
         const bareMatch = trimmed.match(/^([A-Za-z0-9_\.]{2,35}(?:\s+[A-Za-z0-9_\.]{1,35})?)$/);
         if (bareMatch) {
-          addItem(getCleanMyntraSku(bareMatch[1].trim()), 1, false, item.transform[4], item.transform[5]);
+          addItem(getCleanMyntraSku(bareMatch[1].trim()), 1, false, x, y);
           continue;
         }
       }
@@ -333,7 +346,7 @@ export default function MyntraSort({
         if (items.length > 0) {
           totalQty = items.reduce((acc, currItem) => acc + currItem.qty, 0);
           if (items.length === 1) {
-            primarySku = items[0].sku;
+            primarySku = items[0].qty > 1 ? `${items[0].sku} (x${items[0].qty})` : items[0].sku;
             isCombo = items[0].qty > 1;
           } else {
             isCombo = true;
