@@ -1846,7 +1846,6 @@ export default function ExtractSKU() {
 
         // Extract items
         const items = [];
-        const seen = new Set();
 
         const isAddressOrExcluded = (str) => {
           if (!str) return true;
@@ -1864,10 +1863,11 @@ export default function ExtractSKU() {
           if (!cleanSku || cleanSku.length < 2 || cleanSku.length > 40) return;
           if (isAddressOrExcluded(cleanSku)) return;
           if (qty > 50) return; // Strict safety rail against PIN codes
-          const key = `${cleanSku}_${qty}`;
-          if (!seen.has(key)) {
+          const existing = items.find(it => it.sku.toLowerCase() === cleanSku.toLowerCase());
+          if (existing) {
+            existing.qty += qty;
+          } else {
             items.push({ sku: cleanSku, qty });
-            seen.add(key);
           }
         };
 
@@ -1910,9 +1910,18 @@ export default function ExtractSKU() {
               return x < 150 && y >= 80 && y <= 185 && item.str.trim();
             });
 
+            boxItems.sort((a, b) => (b.transform?.[5] || 0) - (a.transform?.[5] || 0));
+
+            const seenPositions = [];
             for (const item of boxItems) {
               const trimmed = item.str.trim();
               if (!trimmed || isAddressOrExcluded(trimmed)) continue;
+
+              const x = item.transform ? item.transform[4] : 0;
+              const y = item.transform ? item.transform[5] : 0;
+              const isOverlaid = seenPositions.some(p => Math.abs(p.y - y) < 2 && Math.abs(p.x - x) < 5 && p.str === trimmed);
+              if (isOverlaid) continue;
+              seenPositions.push({ x, y, str: trimmed });
 
               const slashMatch = trimmed.match(/^([A-Za-z0-9_\.\-]+(?:\s+[A-Za-z0-9_\.\-]+)*)\s*\/\s*(?:Onesize|Free\s*Size|Free|FS|OS|Pack|Set|Pcs|Piece|Standard|XXXL|XXL|XL|XS|[SML]|[0-9]+(?:\s*(?:mm|cm|inch|in|m|kg|g|ml))?|[0-9]+)\s*(?:-\s*(\d+))?$/i);
               if (slashMatch) {

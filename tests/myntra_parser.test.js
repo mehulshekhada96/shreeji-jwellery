@@ -34,8 +34,13 @@ function parseMyntraItems(lines, isTaxInvoice = false, textContentItems = null) 
     if (!cleanSku || cleanSku.length < 2 || cleanSku.length > 40) return;
     if (isAddressOrExcluded(cleanSku)) return;
     if (qty > 50) return;
-    const key = `${cleanSku}_${qty}`;
-    if (!seen.has(key)) {
+
+    const existing = items.find(it => it.sku.toLowerCase() === cleanSku.toLowerCase());
+    if (existing) {
+      existing.qty += qty;
+      if (x !== undefined && existing.x === undefined) existing.x = x;
+      if (y !== undefined && existing.y === undefined) existing.y = y;
+    } else {
       items.push({ 
         sku: cleanSku, 
         displaySku: cleanSku, 
@@ -44,7 +49,6 @@ function parseMyntraItems(lines, isTaxInvoice = false, textContentItems = null) 
         x,
         y
       });
-      seen.add(key);
     }
   };
 
@@ -215,4 +219,32 @@ test('Myntra Parser: Extracts slash sizes and hyphenated SKUs correctly', () => 
   assert.equal(items2.length, 1);
   assert.equal(items2[0].sku, 'el_1711');
   assert.equal(items2[0].qty, 2);
+});
+
+test('Myntra Parser: Correctly accumulates multi-quantity for identical SKU in invoices and labels', () => {
+  // Test Invoice with 2 rows of same SKU
+  const invoiceLines = [
+    'LOODJWST119752185(qc_52) - LAFORWORD Gold-Plated Studded & Beaded Jewellery Set, Size: PACK',
+    'HSN: 71171100, 3.0% IGST',
+    '1 Rs 3000.00 Rs 2267.00 Rs 0.00 Rs 711.65 Rs 21.35 Rs 733.00',
+    'LOODJWST119752185(qc_52) - LAFORWORD Gold-Plated Studded & Beaded Jewellery Set, Size: PACK',
+    'HSN: 71171100, 3.0% IGST',
+    '1 Rs 3000.00 Rs 2267.00 Rs 0.00 Rs 711.65 Rs 21.35 Rs 733.00',
+    'TOTAL Rs 6000.00 Rs 4534.00 Rs 0.00 Rs 1423.30 Rs 42.70 Rs 1466.00'
+  ];
+  const invItems = parseMyntraItems(invoiceLines, true);
+  assert.equal(invItems.length, 1);
+  assert.equal(invItems[0].sku, 'qc_52');
+  assert.equal(invItems[0].qty, 2);
+
+  // Test Label with 2 lines of same SKU in bounding box
+  const textContentItems = [
+    { str: 'EK_E2E', transform: [1, 0, 0, 1, 8, 421] },
+    { str: 'qc_52 / Pack', transform: [1, 0, 0, 1, 6, 171.45] },
+    { str: 'qc_52 / Pack', transform: [1, 0, 0, 1, 6, 159.45] }
+  ];
+  const lblItems = parseMyntraItems([], false, textContentItems);
+  assert.equal(lblItems.length, 1);
+  assert.equal(lblItems[0].sku, 'qc_52');
+  assert.equal(lblItems[0].qty, 2);
 });
